@@ -1,0 +1,2 @@
+#! /bin/sh
+make $@ clean && compile_commands $@ && json2cmake

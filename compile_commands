@@ -1,0 +1,14 @@
+#! /bin/bash
+if [ -e compile_commands.json ]; then
+	mv compile_commands.json compile_commands.`stat --printf=%y compile_commands.json|cut -d' ' -f1`.json
+fi
+echo CodeChecker log -k -o compile_commands.json -b "/usr/bin/make -j1 $@"
+make_command="/usr/bin/make -j1 $@"
+CodeChecker log -k -o compile_commands.json -b "$make_command"
+exit $?
+export LD_PRELOAD=ldlogger.so
+export LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH
+export CC_LOGGER_KEEP_LINK=true
+export CC_LOGGER_GCC_LIKE="gcc:g++:clang"
+export CC_LOGGER_FILE=$PWD/compile_commands.json
+make -j1 $@
