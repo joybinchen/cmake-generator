@@ -8,6 +8,7 @@ import subprocess
 import sys
 import logging
 FORMAT = '%(asctime)-15s %(levelname)-8s %(module)s %(message)s'
+FORMAT = '%(levelname)-8s %(message)s'
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -24,7 +25,7 @@ except NameError:
 
 def freeze(obj):
     if isinstance(obj, dict):
-        return freeze(set([freeze(x) for x in obj.items()]))
+        return freeze(tuple([freeze(x) for x in sorted(obj.items(), key=lambda i: i[0])]))
     if isinstance(obj, list):
         return tuple([freeze(x) for x in obj])
     if isinstance(obj, set):
@@ -34,79 +35,9 @@ def freeze(obj):
     return obj
 
 
-def parsecommand(command, resolve):
-    if (isinstance(command, basestring)):
-        command = shlex.split(command)
-    words = iter(command)
-    compiler = next(words)  # remove the initial 'cc' / 'c++'
-
-    options = []
-    definitions = []
-    includes = []
-    system_includes = set()
-    iquote_includes = set()
-    lib_dirs = set()
-    libs = set()
-    linking = True
-    target = ''
-
-    for word in words:
-        if word == '-o':
-            target = next(words)
-        elif word.startswith('-I'):
-            include = word[2:]
-            includes.append(resolve(include))
-        elif word == '-isystem':
-            include = next(words)
-            include = resolve(include)
-            if include not in includes:
-                includes.append(include)
-            system_includes.add(include)
-        elif word == '-iquote':
-            include = next(words)
-            include = resolve(include)
-            if include not in includes:
-                includes.append(include)
-            iquote_includes.add(include)
-        elif word.startswith('-D'):
-            define = word[2:]
-            if define.find('=') > 0:
-                name, value = define.split('=',1)
-                if value:# and value.find(' ') >= 0:
-                    define = '%s="%s"' % (name, value)
-            definitions.append(define)
-        elif word == '-c':
-            linking = False
-        elif word in ['-arch', '-include', '-x']:
-            options.append(word)
-            options.append(next(words))
-        elif word in ['-MT', '-MF']:
-            next(words)
-        elif word.startswith('-L'):
-            libs.add(word if len(word) > 2 else ('-L'+next(words)))
-        elif word.startswith('-l'):
-            libs.add(word[2:] or next(words))
-        elif word in ['-g', '-O1', '-O2', '-O3']:
-            continue
-        elif word == '-O':
-            next(words)
-        elif word.startswith('-m'):
-            options.append(word)
-            libs.add(word)
-        elif word.startswith('-'):
-            options.append(word)
-
-    return {
-        'compiler': compiler,
-        'libs': libs,
-        'lib_dirs': lib_dirs,
-        'options': options,
-        'definitions': definitions,
-        'includes': includes,
-        'system_includes': system_includes,
-        'iquote_includes': iquote_includes,
-    }, target, linking
-
+def extract_value(command, key):
+    field = filter(lambda x: x[0] == key, command)
+    return field[0][1] if field else None
 
 def get_include_path(include_path, source_dir):
     result = os.path.relpath(include_path, source_dir)
@@ -118,14 +49,17 @@ def get_include_path(include_path, source_dir):
 
 
 class CompilationDatabase(object):
-    used_names = {""}
+    used_names = {"": "Empty"}
     used_in_linking = {}
     disallowed_characters = re.compile("[^A-Za-z0-9_.+\-]")
+
     def __init__(self, infile, outfile):
         self.targets = {}
         self.sources = {}
         self.objects = {}
         self.linkings = {}
+        self.commands = {}
+        self.command = []
         self.input = infile
         self.output = outfile
         filename = os.path.realpath(self.output.name)
@@ -141,79 +75,251 @@ class CompilationDatabase(object):
             return path[len(self.projectdir):]
         return path
 
+    def name_as_target(self, path):
+        relative_path = self.relpath(path).rsplit('/', 1)[-1]
+        basename = os.path.basename(relative_path)
+        name = basename.split('.', 1)[0]
+        name = re.sub(self.disallowed_characters, "-", name)
+        name = name if not name.startswith('lib') else name[3:]
+        return self.use_target_name(name, path)
+
+    def use_target_name(self, name, path):
+        if path is None:
+            path = self.resolve(name, self.projectdir)
+        used_path = self.used_names.get(name)
+        if used_path == path:
+            return name
+        if used_path is not None:
+            index = 2
+            while True:
+                candidate = '{}_{}'.format(name, index)
+                if candidate not in self.used_names:
+                    name = candidate
+                    break
+                index = index + 1
+        self.used_names[name] = path
+        return name
+
     def name_by_common_prefix(self, files):
         prefix = os.path.commonprefix(files)
         name = os.path.basename(prefix.rstrip("-_."))
         name = re.sub(self.disallowed_characters, "", name)
         return name
 
+    def resolve(self, path, cwd=None):
+        if cwd is None:
+            cwd = self.projectdir
+        if not os.path.isabs(path):
+            path = os.path.join(cwd, path)
+        return os.path.normcase(os.path.normpath(path))
+
+    def parse_command(self, command, cwd):
+        if isinstance(command, basestring):
+            command = shlex.split(command)
+        words = iter(command)
+        compiler = next(words)  # remove the initial 'cc' / 'c++'
+
+        options = []
+        definitions = []
+        includes = []
+        system_includes = set()
+        iquote_includes = set()
+        libs = set()
+        linking = 'EXECUTABLE'
+        target = ''
+
+        for word in words:
+            if compiler.endswith("ar"):
+                if not target:
+                    if word.startswith('-'):
+                        if 'c' in word:
+                            linking = 'STATIC'
+                            target = next(words)
+                    elif 'c' in word:
+                        linking = 'STATIC'
+                        target = next(words)
+            elif word == '-o':
+                target = next(words)
+            elif word.startswith('-I'):
+                include = word[2:]
+                includes.append(self.resolve(include, cwd))
+            elif word == '-isystem':
+                include = next(words)
+                include = self.resolve(include, cwd)
+                if include not in includes:
+                    includes.append(include)
+                system_includes.add(include)
+            elif word == '-iquote':
+                include = next(words)
+                include = resolve(include)
+                if include not in includes:
+                    includes.append(include)
+                iquote_includes.add(include)
+            elif word.startswith('-D'):
+                define = word[2:]
+                if define.find('=') > 0:
+                    name, value = define.split('=', 1)
+                    if value:
+                        define = '%s="%s"' % (name, value)
+                definitions.append(define)
+            elif word == '-c':
+                linking = 'OBJECT'
+            elif word in ['-arch', '-include', '-x']:
+                options.append(word)
+                options.append(next(words))
+            elif word in ['-MT', '-MF']:
+                next(words)
+            elif word.startswith('-L'):
+                libs.add(word if len(word) > 2 else ('-L'+next(words)))
+            elif word.startswith('-l'):
+                libs.add(word[2:] or next(words))
+            elif word in ['-g', '-O1', '-O2', '-O3']:
+                continue
+            elif word == '-O':
+                next(words)
+            elif word.startswith('-m'):
+                options.append(word)
+                libs.add(word)
+            elif word == '-shared':
+                options.append(word)
+                linking = 'SHARED'
+            elif word.startswith('-'):
+                options.append(word)
+
+        config = {
+            'compiler': compiler,
+            'linking': linking,
+        }
+        if libs:
+            config['libs'] = freeze(libs)
+        if options:
+            config['options'] = freeze(options)
+        if definitions:
+            config['definitions'] = freeze(definitions)
+        if includes:
+            config['includes'] = freeze(includes)
+        if system_includes:
+            config['system_includes'] = freeze(system_includes)
+        if iquote_includes:
+            config['iquote_includes'] = freeze(iquote_includes)
+        return config, target
+
     def read(self):
         database = json.load(self.input)
         for entry in database:
             self.read_command(entry, entry['directory'])
 
-    def read_command(self, entry, basedir):
-        def resolve(path):
-            if not os.path.isabs(path):
-                path = os.path.join(basedir, path)
-            return os.path.normcase(os.path.normpath(path))
-
+    def read_command(self, entry, cwd):
         cmd = None
         if 'arguments' in entry.keys():
-            cmd, target, linking = parsecommand(entry['arguments'], resolve)
+            cmd, target = self.parse_command(entry['arguments'], cwd)
         elif 'command' in entry.keys():
-            cmd, target, linking = parsecommand(entry['command'], resolve)
+            cmd, target = self.parse_command(entry['command'], cwd)
         if cmd is None: return
+        cmd['cwd'] = entry.get('directory', cwd)
         command = freeze(cmd)
+        cmd_id = self.commands.get(command)
+        if cmd_id is None:
+            cmd_id = len(self.command)
+            self.commands[command] = cmd_id
+            self.command.append(cmd)
+        linking = cmd.get('linking')
 
-        file_ = resolve(entry['file'])
-        self.sources.setdefault(file_, {})[target] = command
-        self.objects[target] = file_, command
-        self.targets.setdefault(command, {}).setdefault(target, set()).add(file_)
-        if not linking: return
-        self.linkings.setdefault(target, {}).setdefault(command, set()).add(file_)
+        target = self.resolve(target, cmd['cwd'])
+        file_ = self.resolve(entry['file'], cmd['cwd'])
+        debug("entry %-35s cmd #%s => %-10s %s"
+             % (self.relpath(file_), cmd_id, linking, self.relpath(target)))
+        self.sources.setdefault(file_, {})[target] = cmd_id
+        self.objects.setdefault(target, {})[file_] = cmd_id
+        self.targets.setdefault(cmd_id, {}).setdefault(target, set()).add(file_)
+        if linking == 'OBJECT' or not linking: return
+        debug("Add linked target %s from %s" % (target, self.relpath(file_)))
+        self.linkings.setdefault(target, {}).setdefault(cmd_id, set()).add(file_)
 
-    def migrate_compilations(self, config, files, target):
+    def output_linked_target(self, name, cmd_id, files, target, libtype):
+        debug("%s %s linked by cmd #%s from %s"
+              % (libtype, self.relpath(target), cmd_id,
+                 ' '.join([self.relpath(f) for f in files])))
+        source_files, config = self.migrate_sub_compilations(cmd_id, files, target, name)
+        debug("Target %s output linked %s %s for %s"
+              % (name, libtype, self.relpath(target),
+                 ' '.join([self.relpath(f) for f in source_files])))
+        self.output_cmake_target(name, config, source_files, target, libtype)
+
+    def migrate_sub_compilations(self, cmd_id, files, target, name):
+        config = {k: v for (k, v) in self.command[cmd_id].items()}
         source_files = set()
+        referenced_libs = set()
         compilations = {}
         for f in files:
-            if f in self.linkings or f not in self.objects:
+            if f in self.linkings:
+                refer = self.refer_linked_target(f)
+                info('%s refer linked target %s'
+                     % (self.relpath(target), self.relpath(refer or f)))
+                if refer:
+                    referenced_libs.add(refer)
+                else:
+                    source_files.add(f)
+                continue
+            if f not in self.objects:
+                info('%s referenced %s not in linked objects as bellow\n\t%s'
+                     % (self.relpath(target), f,
+                        '\n\t'.join(self.linkings.keys())))
                 source_files.add(f)
                 continue
-            source, command = self.objects[f]
-            compilations.setdefault(command, set()).add(source)
+            for source, com_id in self.objects[f].items():
+                compilations.setdefault(com_id, {})[source] = f
+        if referenced_libs:
+            config.setdefault('referenced_libs', set()).update(referenced_libs)
         if len(compilations) > 1:
-            warn("find diferrent compile command to sources of target %s\n\t%s"
-                    % (target, '\n\t'.join([cmd.str() for cmd in compilations])))
-        for command, sources in compilations.items():
-            for k, v in command:
-                if not config.get(k): config[k] = v
-            for source in sources:
-                self.reduce_target(source, command, target)
+            warn("find multiple command creating the same target: %s\n\t%s"
+                 % (target, '\n\t'.join([cmd.str() for cmd in compilations])))
+        for cmd_id, source_product in compilations.items():
+            for k, v in self.command[cmd_id].items():
+                value = config.get(k, v)
+                if type(value) in (set, tuple, frozenset):
+                    value = list(value)
+                    config[k] = value
+                if isinstance(value, list):
+                    for part in v:
+                        if part not in value:
+                            value.append(part)
+                elif v and not config.get(k):
+                    config[k] = v
+            for source, product in source_product.items():
+                self.reduce_target(source, cmd_id, product, name)
                 source_files.add(source)
         return source_files, config
 
-    def reduce_target(self, source, command, target):
-        config = {k: v for (k, v) in command}
-        target_sources = self.targets.get(command, {}).get(target, set())
-        if source in target_sources:
-            debug("pop %s from source list of target %s" % (source, target))
-            target_sources.remove(source)
-            if not target_sources:
-                self.targets[command].pop(target)
-                cmd = config['compiler'] + ' ' +' '.join(config['options'])
-                cmd = '\n'.join(["%s: %s"%(k,v) for k,v in command])
-                debug("pop %s from targets of command\n%s" % (target, cmd))
-        else:
-            warn("file %s not in source list of target %s" % (source, target))
+    def refer_linked_target(self, f):
+        command_sources = self.linkings[f]
+        if not command_sources:
+            return None
+        if len(command_sources) > 1:
+            warn("find multiple command creating the same target: %s" % f)
+        cmd_id, source = command_sources.items()[0]
+        linking = self.command[cmd_id].get('linking')
+        if linking == 'STATIC':
+            return self.name_as_target(f)
+        elif linking == 'SHARED':
+            return self.name_as_target(f)
+        return None
 
-    def output_linked_target(self, name, command, files, target):
-        config = {k: v for (k, v) in command}
-        source_files, config = self.migrate_compilations(config, files, name)
-        debug("linked objects for %s\n\t%s" % (target, '\n\t'.join(files)))
-        info("output linked target: %s for \t%s\n\t%s" % (
-            name, target, '\n\t'.join(source_files)))
-        self.output_cmake_target(name, config, source_files, executable=True)
+    def reduce_target(self, source, cmd_id, product, name):
+        target_sources = self.targets.get(cmd_id, {})
+        sources = target_sources.get(product, set())
+        if source in sources:
+            sources.remove(source)
+            if not sources:
+                target_sources.pop(product)
+                debug("pop %s from targets of cmd #%s"
+                      % (self.relpath(product), cmd_id))
+            debug("Target %s use source %-20s instead of %s"
+                  % (name, self.relpath(source), self.relpath(product)))
+        else:
+            warn("file %s not in source list of target %s\n\t%s\n%s" % (
+                source, product, '\n\t'.join(sources),
+                '\n'.join(["%s: %s" % x for x in cmd_id])))
 
     def write_command(self, command, options, name, parts, single_line=None):
         if single_line is None: single_line = ' '.join(parts) < 40
@@ -228,8 +334,9 @@ class CompilationDatabase(object):
         self.write_command('target_include_directories', options, name, parts)
 
     def output_compile_args(self, arg_type, name, config): 
-        parts = config.get(arg_type)
-        debug("output compile args %s for target %s: %s" % (arg_type, name, parts))
+        parts = config.get(arg_type, ())
+        info("Target %s output compile %-11s: %s"
+             % (name, arg_type, ' '.join(parts)))
         if not parts: return
         self.write_command('target_compile_' + arg_type, 'PRIVATE', name, parts)
 
@@ -243,58 +350,54 @@ class CompilationDatabase(object):
             if len(commands) > 1:
                 warn("target %s created by multiple command:\n%s" % (
                     target, commands))
-            for config, files in command_source.items():
-                name = self.relpath(target).replace('/', '.')
-                name = re.sub(self.disallowed_characters, "", name)
-                self.output_linked_target(name, config, files, target)
-        for (config, target_group) in self.targets.items():
+            for cmd_id, files in command_source.items():
+                name = self.name_as_target(target)
+                linking = self.command[cmd_id].get('linking', 'OBJECT')
+                info("%s %s will be processed as linked target"
+                     % (linking, self.relpath(target)))
+                if linking == 'OBJECT' or not linking:
+                    self.output_linked_target(name, cmd_id, files, target, 'OBJECT')
+                elif linking == 'STATIC':
+                    self.output_linked_target(name, cmd_id, files, target, linking)
+                elif linking == 'SHARED':
+                    self.output_linked_target(name, cmd_id, files, target, linking)
+                else:
+                    self.output_linked_target(name, cmd_id, files, target, linking)
+        for cmd_id, target_sources in self.targets.items():
             files = set()
-            for target, srcs in target_group.items():
+            for target, sources in target_sources.items():
                 if target in self.linkings: continue
-                for f in srcs:
-                    command = self.sources.get(f, {}).get(target, None)
-                    if command is None: continue
-                    if command != config:
-                        warn("target %s generated by diferent command:\n\t%s\n\t%s"%(
-                            target, command, config))
+                for f in sources:
+                    cmd = self.sources.get(f, {}).get(target, cmd_id)
+                    if cmd != cmd_id:
+                        warn("target %s gen by command %s and %s" % (target, cmd, cmd_id))
                     files.add(f)
             if not files: continue
 
             name = self.name_by_common_prefix(files)
-            info("output unlinked library target: %s for command\n%s\n\t%s" % (
-                name, '\n'.join("%s: %s"%(k,v) for (k, v) in config), '\n\t'.join(files)))
-            self.output_library(name, config, files)
+            self.output_library(name, cmd_id, files)
 
-    def output_library(self, name, command, files):
-        config = {k: v for (k, v) in command}
-        self.output_cmake_target(name, config, files, executable=False)
+    def output_library(self, name, cmd_id, files, libtype=None):
+        info("cmd #%s output %s library target %s with %s"
+             % (cmd_id, libtype or 'unlinked', name,
+                ' '.join([self.relpath(f) for f in files])))
+        if not libtype:
+            libtype = 'OBJECT'
+        self.output_cmake_target(name, self.command[cmd_id], files, None, libtype)
 
-    def output_cmake_target(self, name, config, files, executable=False):
+    def output_cmake_target(self, name, config, files, target, libtype):
         files = [self.relpath(f) for f in files]
-        debug("write target %s for files=\n\t%s" % (name, '\n\t'.join(files)))
-        if name in self.used_names:
-            index = 2
-            while True:
-                candidate = '{}_{}'.format(name, index)
-                if candidate not in self.used_names:
-                    name = candidate
-                    break
-                index = index + 1
-        self.used_names.add(name)
-        target_type = None if executable else 'OBJECT'
-        self.output_target(name, config, files, target_type)
+        name = self.use_target_name(name, target)
+        info("Target %s output cmake %-13s: %s" % (name, libtype, ' '.join(files)))
+        self.output_target(name, config, files, libtype)
 
-    def output_target(self, name, config, files, libtype='OBJECT'):
+    def output_target(self, name, config, files, libtype):
         if not files or not name: return
-        if libtype:
-            self.write_command('add_library', libtype, name, files)
-        else:
+        if not libtype or libtype == 'EXECUTABLE':
             self.write_command('add_executable', '', name, files)
+        else:
+            self.write_command('add_library', libtype, name, files)
         self.output_target_config(name, config)
-
-    def output_target_libs(self, name, config):
-        libs = config.get('libs')
-        self.write_command('target_link_libraries', 'PRIVATE', name, libs)
 
     def output_target_config(self, name, config):
         self.output_compile_args('options', name, config)
@@ -303,6 +406,14 @@ class CompilationDatabase(object):
         self.output_includes('SYSTEM PRIVATE', name, config.get('system_includes'))
         self.output_includes('BEFORE PRIVATE', name, config.get('iquote_includes'))
         self.output_target_libs(name, config)
+
+    def output_target_libs(self, name, config):
+        libs = config.get('referenced_libs', set()).copy()
+        if libs:
+            debug("Target %s using referenced libs %s" % (name, ' '.join(libs)))
+        libs.update(config.get('libs', set()))
+        if libs:
+            self.write_command('target_link_libraries', 'PRIVATE', name, libs)
 
 
 def get_default_name(compilation_database):

@@ -1,2 +1,2 @@
 #! /bin/sh
-make $@ clean && compile_commands $@ && json2cmake
+make $@ clean && VERBOSE=ON V=1 AM_DEFAULT_VERBOSITY=1 compile_commands $@ && json2cmake
