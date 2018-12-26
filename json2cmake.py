@@ -417,10 +417,11 @@ class CmakeGenerator(PathUtils):
                 warn("target %s created by multiple command:\n%s" % (
                     target, commands))
             for cmd_id, files in command_source.items():
-                cwd = self.db.command[cmd_id]['cwd']
-                linkage = self.db.command[cmd_id].get('linkage', 'OBJECT')
+                command = self.db.command[cmd_id]
+                directory = command['cwd']
+                linkage = command.get('linkage', 'OBJECT')
                 info("Process %s target %s" % (linkage, self.relpath(target)))
-                generator = self.get_cmake_generator(cwd)
+                generator = self.get_cmake_generator(directory)
                 generator.output_linked_target(cmd_id, files, target, linkage)
 
         for cmd_id, target_sources in self.db.targets.items():
@@ -433,16 +434,19 @@ class CmakeGenerator(PathUtils):
                         warn("target %s gen by command %s and %s" % (target, cmd, cmd_id))
                     files.add(f)
             if files:
-                name = self.name_by_common_prefix(files)
-                self.output_library(name, cmd_id, files)
+                self.output_library(cmd_id, files)
 
-    def output_library(self, name, cmd_id, files, libtype=None):
+    def output_library(self, cmd_id, files, libtype=None):
+        name = self.name_by_common_prefix(files)
+        if not libtype:
+            libtype = 'OBJECT'
+        config = self.db.command[cmd_id]
+        directory = config['cwd']
+        generator = self.get_cmake_generator(directory)
         info("cmd #%s output %s library target %s with %s"
              % (cmd_id, libtype or 'unlinked', name,
                 ' '.join([self.relpath(f) for f in files])))
-        if not libtype:
-            libtype = 'OBJECT'
-        self.output_cmake_target(name, self.db.command[cmd_id], files, None, libtype)
+        generator.output_cmake_target(name, config, files, None, libtype)
 
     def output_cmake_target(self, name, config, files, target, libtype):
         files = [self.relpath(f) for f in files]
