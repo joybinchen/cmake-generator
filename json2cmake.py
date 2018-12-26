@@ -94,7 +94,7 @@ class CompilationDatabase(PathUtils):
         system_includes = set()
         iquote_includes = set()
         libs = set()
-        linking = 'EXECUTABLE'
+        linkage = 'EXECUTABLE'
         target = ''
 
         for word in words:
@@ -102,10 +102,10 @@ class CompilationDatabase(PathUtils):
                 if not target:
                     if word.startswith('-'):
                         if 'c' in word:
-                            linking = 'STATIC'
+                            linkage = 'STATIC'
                             target = next(words)
                     elif 'c' in word:
-                        linking = 'STATIC'
+                        linkage = 'STATIC'
                         target = next(words)
             elif word == '-o':
                 target = next(words)
@@ -132,7 +132,7 @@ class CompilationDatabase(PathUtils):
                         define = '%s="%s"' % (name, value)
                 definitions.append(define)
             elif word == '-c':
-                linking = 'OBJECT'
+                linkage = 'OBJECT'
             elif word in ['-arch', '-include', '-x']:
                 options.append(word)
                 options.append(next(words))
@@ -151,14 +151,14 @@ class CompilationDatabase(PathUtils):
                 libs.add(word)
             elif word == '-shared':
                 options.append(word)
-                linking = 'SHARED'
+                linkage = 'SHARED'
             elif word.startswith('-'):
                 options.append(word)
 
         config = {
             'cwd': cwd,
             'compiler': compiler,
-            'linking': linking,
+            'linkage': linkage,
         }
         if libs:
             config['libs'] = freeze(libs)
@@ -190,8 +190,8 @@ class CompilationDatabase(PathUtils):
         if cmd:
             cmd_id = self.update_command_index(cmd)
             target = self.resolve(target, cwd)
-            linking = cmd.get('linking')
-            self.update_target_index(target, cmd_id, file_, linking)
+            linkage = cmd.get('linkage')
+            self.update_target_index(target, cmd_id, file_, linkage)
         return cmd
 
     def update_command_index(self, cmd):
@@ -203,13 +203,13 @@ class CompilationDatabase(PathUtils):
             self.command.append(cmd)
         return cmd_id
 
-    def update_target_index(self, target, cmd_id, file_, linking):
+    def update_target_index(self, target, cmd_id, file_, linkage):
         debug("entry %-35s cmd #%s => %-10s %s"
-             % (self.relpath(file_), cmd_id, linking, self.relpath(target)))
+             % (self.relpath(file_), cmd_id, linkage, self.relpath(target)))
         self.sources.setdefault(file_, {})[target] = cmd_id
         self.objects.setdefault(target, {})[file_] = cmd_id
         self.targets.setdefault(cmd_id, {}).setdefault(target, set()).add(file_)
-        if linking and linking != 'OBJECT':
+        if linkage and linkage != 'OBJECT':
             self.update_linking_index(target, cmd_id, file_)
 
     def update_linking_index(self, target, cmd_id, file_):
@@ -220,7 +220,7 @@ class CompilationDatabase(PathUtils):
 class CmakeGenerator(PathUtils):
 
     used_names = {"": ""}
-    disallowed_characters = re.compile("[^A-Za-z0-9_.+\-]")
+    disallowed_characters = re.compile("[^A-Za-z0-9_.+\\-]")
 
     def __init__(self, database, name, cwd):
         super(self.__class__, self).__init__(cwd)
@@ -232,7 +232,7 @@ class CmakeGenerator(PathUtils):
         relative_path = self.relpath(path).rsplit('/', 1)[-1]
         basename = os.path.basename(relative_path)
         name = basename.split('.', 1)[0]
-        name = re.sub(self.disallowed_characters, "-", name)
+        name = re.sub(self.disallowed_characters, "_", name)
         name = name if not name.startswith('lib') else name[3:]
         return self.use_target_name(name, path)
 
@@ -321,10 +321,10 @@ class CmakeGenerator(PathUtils):
         if len(command_sources) > 1:
             warn("find multiple command creating the same target: %s" % f)
         cmd_id, source = command_sources.items()[0]
-        linking = self.db.command[cmd_id].get('linking')
-        if linking == 'STATIC':
+        linkage = self.db.command[cmd_id].get('linkage')
+        if linkage == 'STATIC':
             return self.name_as_target(f)
-        elif linking == 'SHARED':
+        elif linkage == 'SHARED':
             return self.name_as_target(f)
         return None
 
@@ -376,17 +376,11 @@ class CmakeGenerator(PathUtils):
                     target, commands))
             for cmd_id, files in command_source.items():
                 name = self.name_as_target(target)
-                linking = self.db.command[cmd_id].get('linking', 'OBJECT')
+                linkage = self.db.command[cmd_id].get('linkage', 'OBJECT')
                 info("%s %s will be processed as linked target"
-                     % (linking, self.relpath(target)))
-                if linking == 'OBJECT' or not linking:
-                    self.output_linked_target(name, cmd_id, files, target, 'OBJECT')
-                elif linking == 'STATIC':
-                    self.output_linked_target(name, cmd_id, files, target, linking)
-                elif linking == 'SHARED':
-                    self.output_linked_target(name, cmd_id, files, target, linking)
-                else:
-                    self.output_linked_target(name, cmd_id, files, target, linking)
+                     % (linkage, self.relpath(target)))
+                self.output_linked_target(name, cmd_id, files, target, linkage)
+
         for cmd_id, target_sources in self.db.targets.items():
             files = set()
             for target, sources in target_sources.items():
