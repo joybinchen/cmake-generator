@@ -230,8 +230,10 @@ class CompilationDatabase(PathUtils):
         missing_depends = filter(lambda x: not os.path.exists(x), local_depends)
         return [self.directory + f for f in missing_depends]
 
-    def read(self):
-        database = json.load(self.input)
+    def read(self, input=None):
+        if input is None:
+            input = self.input
+        database = json.load(input)
         for entry in database:
             self.read_command(entry)
 
@@ -623,6 +625,14 @@ split CMakeLists.txt into multiple files in subdirectories,
 according to the working directory when executing each build command.
         """
     )
+    parser.add_argument(
+        '-e', '--extra-infile', action='store', default='extra_commands.json',
+        help="""
+path of extra compilation database to put you hand writen commands,
+which may be difficult to get automatically captured using a ld logger.
+(default: extra_commands.json)
+        """
+    )
     args = parser.parse_args()
     if args.debug:
         logger.setLevel(logging.DEBUG)
@@ -632,6 +642,8 @@ according to the working directory when executing each build command.
 
     db = CompilationDatabase(args.infile, args.outfile)
     db.read()
+    if os.path.isfile(args.extra_infile):
+        db.read(open(args.extra_infile, 'r'))
     single = not args.multiple_file
     generator = CmakeGenerator(db, args.name, db.directory, single)
     generator.write()
