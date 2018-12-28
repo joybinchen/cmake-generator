@@ -9,6 +9,6 @@ make_command="/usr/bin/make -j1 $@"
 export LD_PRELOAD=ldlogger.so
 export LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH
 export CC_LOGGER_KEEP_LINK=true
-export CC_LOGGER_GCC_LIKE="gcc:g++:clang:ar:dbus-bingding-tool"
+export CC_LOGGER_GCC_LIKE="gcc:g++:clang:ar:dbus-binding-tool:python:python2:python3"
 export CC_LOGGER_FILE=$PWD/compile_commands.json
 make -j1 $@

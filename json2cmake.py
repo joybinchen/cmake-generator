@@ -7,9 +7,11 @@ import shlex
 import subprocess
 import sys
 import logging
-from commands import getoutput
 
-FORMAT = '%(asctime)-15s %(levelname)-8s %(module)s %(message)s'
+if not hasattr(__builtins__, 'basestring'):
+    basestring = str
+
+# FORMAT = '%(asctime)-15s %(levelname)-8s %(module)s %(message)s'
 FORMAT = '%(levelname)-8s %(message)s'
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
@@ -18,11 +20,6 @@ info = logger.info
 debug = logger.debug
 warn = logger.warning
 error = logger.error
-
-try:
-    basestring
-except NameError:
-    basestring = str
 
 
 def freeze(obj):
@@ -35,11 +32,6 @@ def freeze(obj):
     if isinstance(obj, tuple):
         return tuple([freeze(x) for x in obj])
     return obj
-
-
-def extract_value(command, key):
-    field = filter(lambda x: x[0] == key, command)
-    return field[0][1] if field else None
 
 
 class PathUtils(object):
@@ -203,8 +195,9 @@ class CompilationDatabase(PathUtils):
         if linkage == 'OBJECT':
             missing_depends = self.find_dependencies(compiler, file_, config)
             if missing_depends:
-                warn("OBJECT %-25s depends on missing %s"
-                     % (self.relpath(target), ' '.join(missing_depends)))
+                info("OBJECT %-25s depends on missing %s"
+                     % (self.relpath(target),
+                        ' '.join([self.relpath(f) for f in missing_depends])))
         return config, target, missing_depends
 
     def find_dependencies(self, compiler, file_, config):
@@ -216,28 +209,26 @@ class CompilationDatabase(PathUtils):
         if not os.path.exists(file_):
             return [file_]
 
-        def parameters(delimiter, name):
-            parts = config.get(name)
-            return '' if not parts else delimiter + (delimiter.join(parts))
+        dep_command = [compiler, '-MM', '-MG', file_.encode('utf-8')]
+        dep_command.extend(['-D'+p for p in config.get('definitions', ())])
+        dep_command.extend(['-I'+p for p in config.get('includes', ())])
+        for p in config.get('system_includes', ()):
+            dep_command.extend(['-isystem', p])
+        for p in config.get('iquote_includes', ()):
+            dep_command.extend(['-iquote', p])
+        process = subprocess.Popen(dep_command, cwd=cwd, stdout=subprocess.PIPE)
+        output = process.communicate()[0].strip()
+        if not output:
+            return []
 
-        dep_command = "{} {} {} {} {} -MM -MG {}".format(
-            compiler,
-            parameters(' -D', 'definitions'),
-            parameters(' -I', 'includes'),
-            parameters(' -isystem', 'system_includes'),
-            parameters(' -iquote', 'iquote_includes'),
-            file_,
-        )
-        depends = getoutput(dep_command)
-        if depends:
-            depend_list = depends.split(': ', 1)[1].replace('\\\n  ', '').split(' ')
-            depend_list = [f if os.path.isabs(f) else cwd + f for f in depend_list]
-            debug('Files relative to %s\n\t%s' % (self.directory, '\n\t'.join(
-                filter(lambda x: not x.startswith('/usr/'), depend_list))))
-            depend_list = [os.path.relpath(f, self.directory) for f in depend_list]
-            local_depends = filter(lambda x: not x.startswith('../'), depend_list)
-            missing_depends = filter(lambda x: not os.path.exists(x), local_depends)
-            return [self.directory + f for f in missing_depends]
+        depends = output.split(': ', 1)[1].replace('\\\n  ', '').split(' ')
+        depend_list = [f if os.path.isabs(f) else cwd + f for f in depends]
+        debug('Files relative to %s\n\t%s' % (self.directory, '\n\t'.join(
+              filter(lambda x: not x.startswith('/usr/'), depend_list))))
+        depend_list = [os.path.relpath(f, self.directory) for f in depend_list]
+        local_depends = filter(lambda x: not x.startswith('../'), depend_list)
+        missing_depends = filter(lambda x: not os.path.exists(x), local_depends)
+        return [self.directory + f for f in missing_depends]
 
     def read(self):
         database = json.load(self.input)
@@ -251,11 +242,13 @@ class CompilationDatabase(PathUtils):
         arguments = shlex.split(entry.get('command', ''))
         arguments = entry.get('arguments', arguments)
         cmd, target, missing_depends = self.parse_command(arguments, cwd, file_)
-        if cmd:
-            cmd_id = self.update_command_index(cmd)
-            target = self.resolve(target, cwd)
-            linkage = cmd.get('linkage')
-            self.update_target_index(target, cmd_id, file_, linkage)
+        if not cmd:
+            return cmd
+
+        cmd_id = self.update_command_index(cmd)
+        target = self.resolve(target, cwd)
+        linkage = cmd.get('linkage')
+        self.update_target_index(target, cmd_id, file_, linkage)
         for depend in missing_depends:
             debug('Update missing_depends for cmd #%s: %s' % (cmd_id, depend))
             self.command[cmd_id].setdefault('missing_depends', set()).add(depend)
@@ -324,8 +317,8 @@ class CmakeGenerator(PathUtils):
     def name_as_target(self, path):
         relative_path = self.relpath(path).rsplit('/', 1)[-1]
         basename = os.path.basename(relative_path)
-        name = basename.split('.', 1)[0]
-        name = re.sub(self.disallowed_characters, "_", name)
+        name = basename.rsplit('.', 1)[0]
+        name = self.disallowed_characters.sub("_", name.decode('utf-8'))
         name = name if not name.startswith('lib') else name[3:]
         return self.use_target_name(name, path)
 
@@ -476,10 +469,8 @@ class CmakeGenerator(PathUtils):
 
     def output_includes(self, options, name, parts): 
         if not parts: return
-        info("Target %s includes %s\n\t%s"
-             % (name, options, '\n\t'.join(parts)))
-        if self.directory:
-            parts = [self.get_include_path(include) for include in parts]
+        parts = [self.get_include_path(include) for include in parts]
+        info("Target %s includes %s %s" % (name, options, ' '.join(parts)))
         self.write_command('target_include_directories', options, name, parts)
 
     def output_compile_args(self, arg_type, name, config): 
@@ -549,9 +540,9 @@ class CmakeGenerator(PathUtils):
         files = set([self.relpath(f) for f in files])
         missing_depends = config.get('missing_depends', [])
         if missing_depends:
-            warn("Target %s depend on missing files:\n\t%s"
-                 % (name, '\n\t'.join(missing_depends)))
             missing_depends = [self.relpath(f) for f in missing_depends]
+            warn("Target %s depends on missing files: %s"
+                 % (name, ' '.join(missing_depends)))
             files.update(missing_depends)
             config['include_binary_dir'] =True
         name = self.use_target_name(name, target)
