@@ -35,6 +35,7 @@ LDLOGGER_SOURCES = \
 	src/ldlogger-tool.c \
 	src/ldlogger-tool-gcc.c \
 	src/ldlogger-tool-javac.c \
+	src/ldlogger-tool-custom.c \
 	src/ldlogger-util.c
 
 # Sorces for ldlogger

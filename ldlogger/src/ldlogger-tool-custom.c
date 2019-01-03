@@ -31,8 +31,12 @@ typedef enum _GccArgsState
   /**
    * After a -o paramater.
    */
-  InOutputArg
-} GccArgsState;
+  InOutputArg,
+  /**
+   * After a plain option paramater. Don't recognize it as input or file.
+   */
+  InOptionArg,
+} CustomArgsState;
 
 /**
  * Reads a colon separated list from the given environment variable and tries
@@ -99,18 +103,12 @@ static char* findFullPath(const char* executable, char* fullpath) {
   return 0;
 }
 
-static void toSnakeUpper(char* str_)
+static void normalizeToolName(char* str_)
 {
   char *p = NULL;
   for (p = str_ + strlen(str_) - 1; p >= str_; --p) {
-    char c = *p;
-    if (c >= 'a' && c <= 'z') {
-      *p = c - 32;
-    } else if (c >= '0' && c <= '9') {
-      /* do nothing */
-    } else if (c >= 'A' && c <= 'Z') {
-      /* do nothing */
-    } else {
+    if (!isalnum(*p))
+    {
       *p = '_';
     }
   }
@@ -126,27 +124,33 @@ int loggerCustomParserCollectActions(
   /* Position of the last include path + 1 */
   char full_prog_path[PATH_MAX+1];
   static const char custom_output_env_prefix[] = "CC_LOGGER_OUTPUT_ARG_";
-  char upper_tool_name[100];
+  static const char custom_option_env_prefix[] = "CC_LOGGER_OPTION_ARG_";
+  char tool_name[100];
   char custom_env[100];
   char custom_arg_env[100];
   char *path_ptr;
   char* outputArgName;
   const char* argListVar;
+  const char* optListVar;
 
-  GccArgsState state = Normal;
+  CustomArgsState state = Normal;
   LoggerAction* action = loggerActionNew(toolName_);
 
-  strncpy(upper_tool_name, toolName_, sizeof(upper_tool_name) - 1);
-  toSnakeUpper(upper_tool_name);
+  strncpy(tool_name, toolName_, sizeof(tool_name) - 1);
+  normalizeToolName(tool_name);
 
   strcpy(custom_env, custom_output_env_prefix);
-  strncat(custom_env, upper_tool_name, sizeof(custom_env) - 1);
+  strncat(custom_env, tool_name, sizeof(custom_env) - 1);
   outputArgName= getenv(custom_env);
   if (outputArgName == NULL) return 0;
 
   strcpy(custom_arg_env, custom_output_env_prefix);
-  strncat(custom_arg_env, upper_tool_name, sizeof(custom_arg_env) - 1);
+  strncat(custom_arg_env, tool_name, sizeof(custom_arg_env) - 1);
   argListVar = getenv(custom_arg_env);
+
+  strcpy(custom_arg_env, custom_option_env_prefix);
+  strncat(custom_arg_env, tool_name, sizeof(custom_arg_env) - 1);
+  optListVar = getenv(custom_arg_env);
 
   /* If prog_ is a relative path we try to
    * convert it to absolute path.
@@ -168,34 +172,48 @@ int loggerCustomParserCollectActions(
     const char* arg_ = argv_[i];
     char argToAdd[PATH_MAX];
     strcpy(argToAdd, arg_);
-    if (state == Normal)
+    if (state == InOptionArg)
     {
-      char *pos = matchToArgList(argListVar, argToAdd);
+      state = Normal;
+    }
+    else if (state == Normal)
+    {
+      char *pos = matchToArgList(optListVar, argToAdd);
       if (pos == NULL)
       {
-        if (arg_[0] != '-') {
+        char *pos = matchToArgList(argListVar, argToAdd);
+        if (pos == NULL)
+        {
+          if (arg_[0] != '-') {
+            char fullPath[PATH_MAX];
+            if (loggerMakePathAbs(arg_, fullPath, 0)) {
+              strcpy(argToAdd, fullPath);
+              loggerVectorAddUnique(&action->sources, loggerStrDup(fullPath),
+                                    (LoggerCmpFuc) &strcmp);
+              if (argListVar[0] == '$'
+                  && strtol(argListVar+1, NULL, 10) == action->sources.size)
+                loggerFileInitFromPath(&action->output, fullPath);
+            }
+          }
+        }
+        else if (*pos == 0)
+        {
+          state =InOutputArg;
+        }
+        else if (*pos == '=')
+        {
           char fullPath[PATH_MAX];
-          if (loggerMakePathAbs(arg_, fullPath, 0)) {
-            strcpy(argToAdd, fullPath);
-            loggerVectorAddUnique(&action->sources, loggerStrDup(fullPath),
-                                  (LoggerCmpFuc) &strcmp);
+          if (loggerMakePathAbs(pos + 1, fullPath, 0))
+          {
+            loggerFileInitFromPath(&action->output, fullPath);
+            pos[1] = 0;
+            strcat(argToAdd, fullPath);
           }
         }
       }
       else if (*pos == 0)
       {
-        state =InOutputArg;
-      }
-      else if (*pos == '=')
-      {
-        char fullPath[PATH_MAX];
-        if (loggerMakePathAbs(pos + 1, fullPath, 0))
-        {
-          loggerFileInitFromPath(&action->output, fullPath);
-          pos[1] = 0;
-          strcat(argToAdd, fullPath);
-        }
-        loggerVectorAdd(&action->arguments, loggerStrDup(pos + 1));
+        state =InOptionArg;
       }
     }
     else /* if (state == InOutputArg) */
@@ -210,6 +228,19 @@ int loggerCustomParserCollectActions(
     }
     if (argToAdd[0]) {
       loggerVectorAdd(&action->arguments, loggerStrDup(argToAdd));
+    }
+  }
+
+  if (argListVar[0] == '$')
+  {
+    char* end_pos;
+    long output_pos = strtol(argListVar+1, &end_pos, 10);
+    if (output_pos < 0) {
+      output_pos += action->sources.size;
+      if (output_pos >= 0) {
+        loggerFileInitFromPath(&action->output, action->sources.data[output_pos]);
+        /*loggerVectorErase(&action->sources, output_pos);*/
+      }
     }
   }
 

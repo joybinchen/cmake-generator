@@ -18,6 +18,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "ldlogger-hooks.h"
 
@@ -52,6 +53,7 @@ static void unsetLDPRELOAD(const char* const filename_, ...)
   }
 }
 
+
 /**
  * Tries to log an exec* call.
  *
@@ -67,12 +69,20 @@ static void tryLog(
   const char* loggerArgs[CC_LOGGER_MAX_ARGS];
   char* ldpreload;
 
+  char const* loggerDebug;
+#define debug if(loggerDebug) fprintf
+  loggerDebug = getenv("CC_LOGGER_DEBUG");
+  debug(stderr, "tryLog %s", filename_);
   loggerArgs[0] = filename_;
   for (i = 0; argv_[i]; ++i)
   {
+    debug(stderr, " %s", argv_[i]);
     loggerArgs[i+1] = argv_[i];
   }
   loggerArgs[i+1] = NULL;
+  debug(stderr, "\n");
+#undef debug
+  fflush(stderr);
 
   logExec(i+1, (char* const*) loggerArgs);
 }

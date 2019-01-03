@@ -93,7 +93,30 @@ class CompilationDatabase(PathUtils):
 
         if compiler == 'ccache':
             compiler = 'clang'
-        if compiler == 'glib-genmarshal':
+        if compiler == 'git':
+            for word in words:
+                if word == '>':
+                    linkage = 'SOURCE'
+                    target = next(words)
+                    #options.append(word)
+                    #options.append(target)
+                elif word.startswith('-'):
+                    options.append(word)
+                else:
+                    options.append(word)
+        elif compiler == 'moc':
+            for word in words:
+                if word == '-o':
+                    linkage = 'SOURCE'
+                    target = next(words)
+                    #options.append(word)
+                    #options.append(target)
+                elif word.startswith('-'):
+                    options.append(word)
+                    if word == '--include':
+                        options.append(next(words))
+
+        elif compiler == 'glib-genmarshal':
             for word in words:
                 if word == '--output':
                     linkage = 'SOURCE'
@@ -103,7 +126,7 @@ class CompilationDatabase(PathUtils):
                 elif word.startswith('-'):
                     options.append(word)
 
-        if compiler == 'dbus-binding-tool':
+        elif compiler == 'dbus-binding-tool':
             for word in words:
                 if word.startswith('--output='):
                     linkage = 'SOURCE'
@@ -111,7 +134,7 @@ class CompilationDatabase(PathUtils):
                 elif word.startswith('-'):
                     options.append(word)
 
-        if compiler.endswith("ar"):
+        elif compiler.endswith("ar"):
             for word in words:
                 if not target:
                     if word.startswith('-'):
@@ -216,6 +239,9 @@ class CompilationDatabase(PathUtils):
             dep_command.extend(['-isystem', p])
         for p in config.get('iquote_includes', ()):
             dep_command.extend(['-iquote', p])
+        if '-fPIC' in config.get('options', []):
+            dep_command.append('-fPIC')
+        #debug('check dependencies on %s with commond: %s' %(cwd, ' '.join(dep_command)))
         process = subprocess.Popen(dep_command, cwd=cwd, stdout=subprocess.PIPE)
         output = process.communicate()[0].strip()
         if not output:
@@ -223,8 +249,8 @@ class CompilationDatabase(PathUtils):
 
         depends = output.split(': ', 1)[1].replace('\\\n  ', '').split(' ')
         depend_list = [f if os.path.isabs(f) else cwd + f for f in depends]
-        debug('Files relative to %s\n\t%s' % (self.directory, '\n\t'.join(
-              filter(lambda x: not x.startswith('/usr/'), depend_list))))
+        #debug('Files relative to %s\n\t%s' % (self.directory, '\n\t'.join(
+        #      filter(lambda x: not x.startswith('/usr/'), depend_list))))
         depend_list = [os.path.relpath(f, self.directory) for f in depend_list]
         local_depends = filter(lambda x: not x.startswith('../'), depend_list)
         missing_depends = filter(lambda x: not os.path.exists(x), local_depends)
@@ -300,6 +326,7 @@ class CmakeGenerator(PathUtils):
         custom_target_output_config = {
             'glib-genmarshal': '--output ',
             'dbus-binding-tool': '--output=',
+            'moc': '-o ',
         }
         prefix = custom_target_output_config.get(compiler, ' ')
         return prefix + self.cmake_resolve_binary(target)
