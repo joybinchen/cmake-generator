@@ -9,13 +9,18 @@ make_command="/usr/bin/make -j1 $@"
 export LD_PRELOAD=ldlogger.so
 export LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH
 export CC_LOGGER_KEEP_LINK=true
-export CC_LOGGER_GCC_LIKE="gcc:g++:clang:ar:python:python2:python3"
+export CC_LOGGER_GCC_LIKE="gcc:g++:clang:ar:uic:moc:python:python2:python3"
 export CC_LOGGER_FILE="$PWD/compile_commands.json"
-export CC_LOGGER_CUSTOM_LIKE="moc:qmake:dbus-binding-tool:glib-genmarshal"
-export CC_LOGGER_OUTPUT_ARG_moc="-o"
-export CC_LOGGER_OPTION_ARG_moc="--include"
+export CC_LOGGER_CUSTOM_LIKE="qmake:lrelease:install:msgfmt:dbus-binding-tool:glib-genmarshal"
+export CC_LOGGER_OUTPUT_ARG_moc='-o'
+export CC_LOGGER_OPTION_ARG_moc='--include'
 export CC_LOGGER_OUTPUT_ARG_qmake='$-1'
-export CC_LOGGER_OPTION_ARG_qmake="-install"
-export CC_LOGGER_OUTPUT_ARG_dbus_bingding_tool="--output"
-export CC_LOGGER_OUTPUT_ARG_glib_genmarshal="--output"
-make -j1 $@
+export CC_LOGGER_OPTION_ARG_qmake='-install'
+export CC_LOGGER_OUTPUT_ARG_lrelease='-qm'
+export CC_LOGGER_OUTPUT_ARG_install='$-1'
+export CC_LOGGER_OPTION_ARG_install='-m'
+export CC_LOGGER_OUTPUT_ARG_msgfmt='-o:--output-file'
+export CC_LOGGER_OUTPUT_ARG_dbus_bingding_tool='--output'
+export CC_LOGGER_OUTPUT_ARG_glib_genmarshal='--output'
+echo $@
+$@

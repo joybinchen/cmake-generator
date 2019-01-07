@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import argparse
 import json
 import os.path
@@ -7,12 +7,15 @@ import shlex
 import subprocess
 import sys
 import logging
+import diff_match_patch
+
+diff = diff_match_patch.diff_match_patch().diff_main
 
 if not hasattr(__builtins__, 'basestring'):
     basestring = str
 
 # FORMAT = '%(asctime)-15s %(levelname)-8s %(module)s %(message)s'
-FORMAT = '%(levelname)-8s %(message)s'
+FORMAT = '%(levelname)-8s %(lineno)5d %(message)s'
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -20,6 +23,14 @@ info = logger.info
 debug = logger.debug
 warn = logger.warning
 error = logger.error
+
+DISALLOWED_CHARACTERS = re.compile("[^A-Za-z0-9_.+\\-]")
+CUSTOM_TARGET_OUTPUT_CONFIG = {
+    'glib-genmarshal': '--output ',
+    'dbus-binding-tool': '--output=',
+    'moc': '-o ',
+    'msgfmt': '-o ',
+}
 
 
 def freeze(obj):
@@ -32,6 +43,25 @@ def freeze(obj):
     if isinstance(obj, tuple):
         return tuple([freeze(x) for x in obj])
     return obj
+
+
+def get_diff_pattern(text1, text2):
+    diff_result = diff(text1, text2)
+    pattern = lhs = rhs = ''
+    fields = []
+    for diff_type, diff_part in diff_result:
+        if diff_type < 0:
+            lhs += diff_part
+        elif diff_type > 0:
+            rhs += diff_part
+        else:
+            if lhs or rhs:
+                pattern += '%%(%d)s' % len(fields)
+                fields.append((lhs, rhs))
+                lhs = rhs = ''
+            pattern += diff_part
+    #debug('Diff result %s for %s %s: %s' % (pattern, text1, text2, fields))
+    return pattern, fields
 
 
 class PathUtils(object):
@@ -62,7 +92,8 @@ class CompilationDatabase(PathUtils):
         self.sources = {}
         self.objects = {}
         self.linkings = {}
-        self.commands = {}
+        self.installs = {}
+        self.install_command = []
         self.command = []
         self.input = infile
         filename = os.path.realpath(infile.name)
@@ -81,6 +112,7 @@ class CompilationDatabase(PathUtils):
         if compiler.startswith('python'):
             compiler = os.path.basename(next(words))
 
+        config = {}
         options = []
         definitions = []
         includes = []
@@ -93,13 +125,13 @@ class CompilationDatabase(PathUtils):
 
         if compiler == 'ccache':
             compiler = 'clang'
+        if compiler == 'msgfmt':
+            linkage = 'LOCALE'
         if compiler == 'git':
             for word in words:
                 if word == '>':
                     linkage = 'SOURCE'
                     target = next(words)
-                    #options.append(word)
-                    #options.append(target)
                 elif word.startswith('-'):
                     options.append(word)
                 else:
@@ -109,20 +141,50 @@ class CompilationDatabase(PathUtils):
                 if word == '-o':
                     linkage = 'SOURCE'
                     target = next(words)
-                    #options.append(word)
-                    #options.append(target)
                 elif word.startswith('-'):
                     options.append(word)
                     if word == '--include':
                         options.append(next(words))
+
+        elif compiler == 'install':
+            for word in words:
+                if word.startswith('-'):
+                    if word == '-c':
+                        options.append(word)
+                    if word == '-m':
+                        options.append("%s %s" % (word, next(words)))
+                    else:
+                        options.append(word)
+                elif word != file_:
+                    linkage = 'INSTALL'
+                    target, destination = self.resolve_destination(word, cwd, file_)
+                    config['destination'] = destination
+
+        elif compiler == 'qmake':
+            for word in words:
+                if word.startswith('-'):
+                    if word == '-install':
+                        options.append("%s %s" %(word, next(words)))
+                    else:
+                        options.append(word)
+                elif word != file_:
+                    linkage = 'INSTALL'
+                    target, destination = self.resolve_destination(word, cwd, file_)
+                    config['destination'] = destination
+
+        elif compiler == 'lrelease':
+            for word in words:
+                if word == '-qm':
+                    linkage = 'LOCALE'
+                    target = next(words)
+                elif word.startswith('-'):
+                    options.append(word)
 
         elif compiler == 'glib-genmarshal':
             for word in words:
                 if word == '--output':
                     linkage = 'SOURCE'
                     target = next(words)
-                    #options.append(word)
-                    #options.append(target)
                 elif word.startswith('-'):
                     options.append(word)
 
@@ -198,11 +260,11 @@ class CompilationDatabase(PathUtils):
             elif word.startswith('-'):
                 options.append(word)
 
-        config = {
+        config.update({
             'cwd': cwd,
             'compiler': compiler,
             'linkage': linkage,
-        }
+        })
         if libs:
             config['libs'] = freeze(libs)
         if options:
@@ -222,6 +284,18 @@ class CompilationDatabase(PathUtils):
                      % (self.relpath(target),
                         ' '.join([self.relpath(f) for f in missing_depends])))
         return config, target, missing_depends
+
+    def resolve_destination(self, path, cwd, file_):
+        target = self.resolve(path, cwd)
+        if os.path.isdir(target):
+            destination = target
+            target = os.path.join(target, os.path.basename(file_))
+        else:
+            if os.path.basename(target) == os.path.basename(file_):
+                destination = os.path.dirname(target)
+            else:
+                destination = target
+        return target, destination
 
     def find_dependencies(self, compiler, file_, config):
         cwd = config['cwd']
@@ -243,7 +317,7 @@ class CompilationDatabase(PathUtils):
             dep_command.append('-fPIC')
         #debug('check dependencies on %s with commond: %s' %(cwd, ' '.join(dep_command)))
         process = subprocess.Popen(dep_command, cwd=cwd, stdout=subprocess.PIPE)
-        output = process.communicate()[0].strip()
+        output = process.communicate()[0].strip().decode('utf-8')
         if not output:
             return []
 
@@ -260,44 +334,59 @@ class CompilationDatabase(PathUtils):
         if input is None:
             input = self.input
         database = json.load(input)
+        cmd_dict = {}
+        install_cmd_dict = {}
         for entry in database:
-            self.read_command(entry)
+            self.read_command(entry, cmd_dict, install_cmd_dict)
 
-    def read_command(self, entry):
+    def read_command(self, entry, cmd_dict, install_cmd_dict):
         cwd = entry.get('directory', self.directory)
         file_ = self.resolve(entry['file'], cwd)
-        cmd = None
         arguments = shlex.split(entry.get('command', ''))
         arguments = entry.get('arguments', arguments)
         cmd, target, missing_depends = self.parse_command(arguments, cwd, file_)
         if not cmd:
             return cmd
 
-        cmd_id = self.update_command_index(cmd)
         target = self.resolve(target, cwd)
         linkage = cmd.get('linkage')
+        if linkage == 'INSTALL':
+            self.update_install_index(target, cmd, file_, install_cmd_dict)
+            return cmd
+
+        cmd_id = self.update_command_index(cmd, cmd_dict, self.command, debug)
         self.update_target_index(target, cmd_id, file_, linkage)
         for depend in missing_depends:
             debug('Update missing_depends for cmd #%s: %s' % (cmd_id, depend))
             self.command[cmd_id].setdefault('missing_depends', set()).add(depend)
         return cmd
 
-    def update_command_index(self, cmd):
+    @staticmethod
+    def update_command_index(cmd, cmd_dict, cmd_list, log=None):
         command = freeze(cmd)
-        cmd_id = self.commands.get(command)
+        cmd_id = cmd_dict.get(command)
         if cmd_id is None:
-            cmd_id = len(self.command)
-            self.commands[command] = cmd_id
-            self.command.append(cmd)
+            cmd_id = len(cmd_list)
+            cmd_dict[command] = cmd_id
+            cmd_list.append(cmd)
+            if log:
+                log('New cmd #%s: %s'
+                    % (cmd_id, '\n'.join(["%-10s %s" % x for x in command])))
         return cmd_id
+
+    def update_install_index(self, target, cmd, file_, cmd_dict):
+        cmd_id = self.update_command_index(cmd, cmd_dict, self.install_command)
+        debug("Install cmd #%s install %-27s => %s"
+              % (cmd_id, self.relpath(file_), self.relpath(target)))
+        self.installs.setdefault(cmd_id, {})[target] = file_
 
     def update_target_index(self, target, cmd_id, file_, linkage):
         debug("entry %-35s cmd #%s => %-10s %s"
-             % (self.relpath(file_), cmd_id, linkage, self.relpath(target)))
+              % (self.relpath(file_), cmd_id, linkage, self.relpath(target)))
         self.sources.setdefault(file_, {})[target] = cmd_id
         self.objects.setdefault(target, {})[file_] = cmd_id
         self.targets.setdefault(cmd_id, {}).setdefault(target, set()).add(file_)
-        if linkage not in ('OBJECT', None):
+        if linkage not in ('OBJECT', 'LOCALE', None):
             self.update_linking_index(target, cmd_id, file_)
 
     def update_linking_index(self, target, cmd_id, file_):
@@ -306,11 +395,266 @@ class CompilationDatabase(PathUtils):
         self.linkings.setdefault(target, {}).setdefault(cmd_id, set()).add(file_)
 
 
-class CmakeGenerator(PathUtils):
+class CmakeConverter(PathUtils):
 
-    used_names = {"": ""}
-    disallowed_characters = re.compile("[^A-Za-z0-9_.+\\-]")
     generators = {}
+
+    def __init__(self, database, name, cwd, single_file=False):
+        super(self.__class__, self).__init__(cwd)
+        self.db = database
+        self.name = name
+        self.single_file = single_file
+        self.common_configs = {}
+
+    def simplify_command_common_args(self, arg_name):
+        common_values = None
+        for values in [cmd.get(arg_name) for cmd in self.db.command]:
+            if values:
+                if common_values is None:
+                    common_values = list(values)
+                    continue
+                for v in common_values:
+                    if v not in values:
+                        common_values.remove(v)
+        if not common_values:
+            return None
+        self.common_configs[arg_name] = common_values
+        for command in self.db.command:
+            values = command.get(arg_name)
+            if values is None:
+                continue
+            new_values = filter(lambda x: x not in common_values, values)
+            command[arg_name] = freeze(tuple(new_values))
+        return common_values
+
+    def migrate_install_commands(self):
+        groups = {}
+        installs = list(filter(lambda x: len(x[1]) == 1, self.db.installs.items()))
+        migrated_commands = {}
+        for cmd_id, target_files in installs:
+            self.db.installs.pop(cmd_id)
+            command = self.db.install_command[cmd_id].copy()
+            destination = command.pop('destination')
+            target, file_ = next(iter(target_files.items()))
+            freezed = freeze(command)
+            new_cmd_id = migrated_commands.get(freezed)
+            if new_cmd_id is None:
+                new_cmd_id = len(self.db.install_command)
+                migrated_commands[freezed] = new_cmd_id
+                self.db.install_command.append(dict(command))
+            dest_groups = groups.setdefault(freezed, {})
+            self.migrate_command(target, file_, dest_groups)
+            self.db.install_command[cmd_id] = None
+            debug('Install cmd #%d migrated into cmd #%d' % (cmd_id, new_cmd_id))
+
+        for command, dest_groups in groups.items():
+            cmd_id = migrated_commands[command]
+            self.db.installs[cmd_id] = dest_groups
+
+    def migrate_command(self, target, source, groups):
+        if not groups:
+            info('Initialize empty group with source & target\n\t%s => %s'
+                 % (target, source))
+            groups[(target, '')] = [(source, target), ]
+            return True
+
+        for (dest, src_pattern), file_targets in groups.items():
+            if src_pattern:
+                matcher = re.compile(src_pattern % {'0': '(.*)'})
+                matched = matcher.match(source)
+                if matched:
+                    match_groups = matched.groups()
+                    convert_dict = dict([(str(i), g) for i, g in
+                                         zip(range(0, len(match_groups)), match_groups)])
+                    converted_target = dest % convert_dict
+                    if converted_target == target:
+                        file_targets.append((source, target))
+                        info (('Existed pattern\t%s\t%s\n\t' % (src_pattern, dest)) +
+                              ('matches source and target\t%s\t%s\n' % (source, target)))
+                        return True
+
+        for (dest, src_pattern), file_targets in groups.items():
+            prev_pattern = src_pattern or file_targets[0][0]
+            file_pattern, file_fields = get_diff_pattern(
+                prev_pattern, source)
+            if len(file_fields) != 1: continue
+            dest_pattern, dest_fields = get_diff_pattern(dest, target)
+            if not dest_pattern: continue
+            debug('Found pattern %s with fields %s for\n\t%s\n\t%s\nsrc_pattern=\t%s\nfile_pattern=\t%s'
+                  % (dest_pattern, dest_fields, dest, target, src_pattern, file_pattern))
+
+            field_dict = {}
+            pattern_ok = True
+            for field in dest_fields:
+                if field not in file_fields:
+                    pattern_ok = False
+                    break
+                field_dict[str(file_fields.index(field))] = field[1]
+            if not pattern_ok: continue
+
+            info('migrating under %s\t%s\ngot\t%s\n\t%s\nfor\t%s\n\t%s\nand\t%s'
+                 % (prev_pattern, field_dict,
+                    dest_pattern, target,
+                    file_pattern, source,
+                    '\n\t'.join(["%s <- %s" % (t, self.relpath(f))
+                                 for f, t in file_targets[:3]])))
+            file_targets.append((source, target))
+            if src_pattern != file_pattern:
+                if src_pattern:
+                    matcher = re.compile(file_pattern % {'0': '(.*)'})
+                    for file_, target in file_targets:
+                        if not matcher.match(file_):
+                            return True
+                    info('migrate_command when %s\n\treplace\t%s\n\t ===>\t%s\ntargets:\n\t%s'
+                         % ((source, target),
+                            (dest, src_pattern),
+                            (dest_pattern, file_pattern),
+                            '\n\t'.join(["%s\t%s" % x for x in file_targets])))
+                groups.pop((dest, src_pattern))
+                groups[(dest_pattern, file_pattern)] = file_targets
+            return True
+        info('No matching pattern %s in groups' % target)
+        groups[(target, '')] = [(source, target), ]
+        return True
+
+    def convert(self):
+        root_generator = self.get_root_generator()
+        for arg_name in ('includes', 'system_includes', 'iquote_includes',
+                         'options', 'definitions'):
+            values = self.simplify_command_common_args(arg_name)
+            if values:
+                root_generator.output_project_common_args(arg_name, values)
+        self.migrate_install_commands()
+        self.write()
+
+    def write(self):
+        for (target, command_source) in self.db.linkings.items():
+            commands = command_source.keys()
+            if len(commands) > 1:
+                warn("target %s created by multiple command:\n%s" % (
+                    target, commands))
+            for cmd_id, files in command_source.items():
+                command = self.db.command[cmd_id]
+                directory = command['cwd']
+                linkage = command.get('linkage', 'OBJECT')
+                info("Process %s target %s" % (linkage, self.relpath(target)))
+                generator = self.get_cmake_generator(directory)
+                if linkage == 'SOURCE':
+                    generator.output_custom_command(target, cmd_id, files)
+                else:
+                    generator.output_linked_target(cmd_id, files, target, linkage)
+
+        for cmd_id, target_sources in self.db.targets.items():
+            command = self.db.command[cmd_id]
+            linkage = command.get('linkage', 'OBJECT')
+            if linkage == 'LOCALE':
+                self.output_locales(cmd_id, command, target_sources)
+                continue
+            files = set()
+            for target, source in target_sources.items():
+                if target in self.db.linkings: continue
+                for f in source:
+                    cmd = self.db.sources.get(f, {}).get(target, cmd_id)
+                    if cmd != cmd_id:
+                        warn("target %s gen by command %s and %s" % (target, cmd, cmd_id))
+                    files.add(f)
+            if files:
+                self.output_library(cmd_id, command, tuple(files), linkage)
+
+        for cmd_id, target_sources in self.db.installs.items():
+            files = set()
+            command = self.db.install_command[cmd_id]
+            for target, source in target_sources.items():
+                if type(target) is basestring:
+                    files.add(source)
+                    continue
+                # target is tuple
+                if target[1]:
+                    self.output_migrated_install(cmd_id, target, source)
+                    continue
+                if len(source) != 1:
+                    warn("Install target %s fail to migrate by install cmd #%s" % (target, cmd_id))
+                for f in source:
+                    command['destination'] = f[0]
+                    files.add(f[1])
+            if files:
+                self.output_install(cmd_id, command, tuple(files))
+
+    def output_migrated_install(self, cmd_id, patterns, files):
+        dest_pattern, file_pattern = patterns
+        if not file_pattern:
+            self.output_install(cmd_id, self.db.install_command[cmd_id], files)
+        matcher = re.compile(file_pattern % {'0': '(.*)'})
+        matched = []
+        for file_, target in files:
+            match = matcher.match(file_)
+            if match.groups():
+                matched.append(match.groups()[0])
+            else:
+                debug('Fail to match %s in %s' % (file_pattern, file_))
+        command = self.db.install_command[cmd_id]
+        generator = self.get_cmake_generator(command['cwd'])
+        generator.output_migrated_install(command, dest_pattern, file_pattern, matched)
+
+    def get_root_generator(self):
+        return self.get_cmake_generator(self.db.directory)
+
+    def get_cmake_generator(self, directory):
+        if self.single_file:
+            directory = self.directory
+        if directory == self.directory:
+            name = self.name
+        else:
+            name = "%s-%s" % (self.name, self.relpath(directory))
+        generators = self.__class__.generators
+        generator = generators.get(name)
+        if generator is None:
+            generator = CmakeGenerator(self.db, name, directory, self.single_file)
+            generators[name] = generator
+            root_generator = self.get_root_generator()
+            if root_generator != generator:
+                root_generator.output_subdirectory(directory)
+        return generators[name]
+
+    def output_install(self, cmd_id, config, files):
+        name = self.name_by_common_prefix(files)
+        directory = config['cwd']
+        generator = self.get_cmake_generator(directory)
+        info("Target %s installed by cmd #%s to %s"
+             % (name, cmd_id, ' '.join([self.relpath(f) for f in files])))
+        generator.output_cmake_install(name, config, files)
+
+    def output_locales(self, cmd_id, command, target_sources):
+        generator = self.get_cmake_generator(command['cwd'])
+        groups = {}
+        for target, sources in target_sources.items():
+            for source in sources:
+                self.migrate_command(target, source, groups)
+        info("cmd #%s output locale target %s with %s"
+             % (cmd_id,
+                ' '.join([self.relpath(x[0]) for x in target_sources]),
+                ' '.join([self.relpath(x[1]) for x in target_sources])))
+        for (dest_pattern, src_pattern), target_sources in groups.items():
+            generator.output_locales(
+                cmd_id, command, dest_pattern, src_pattern, target_sources)
+
+    def output_library(self, cmd_id, command, files, linkage):
+        generator = self.get_cmake_generator(command['cwd'])
+        name = self.name_by_common_prefix(files)
+        info("cmd #%s output %s library target %s with %s"
+             % (cmd_id, linkage or 'unlinked', name,
+                ' '.join([self.relpath(f) for f in files])))
+        generator.output_cmake_target(name, command, files, None, linkage)
+
+    def name_by_common_prefix(self, files):
+        prefix = os.path.commonprefix(files)
+        name = os.path.basename(prefix.rstrip("-_."))
+        name = re.sub(DISALLOWED_CHARACTERS, "", name)
+        return name
+
+
+class CmakeGenerator(PathUtils):
+    used_names = {"": ""}
 
     def __init__(self, database, name, cwd, single_file=False):
         super(self.__class__, self).__init__(cwd)
@@ -322,13 +666,26 @@ class CmakeGenerator(PathUtils):
         info("write project %s in directory \t%s" % (name, self.directory))
         self.output.write('project({} LANGUAGES C CXX)\n\n'.format(name))
 
+    def output_project_common_args(self, arg_name, values):
+        if not values:
+            return
+        if arg_name.endswith('includes'):
+            if arg_name == 'includes':
+                self.write_command('include_directories', 'AFTER', '', values)
+            elif arg_name == 'system_includes':
+                self.write_command('include_directories', 'AFTER', 'SYSTEM', values)
+            elif arg_name == 'iquote_includes':
+                self.write_command('include_directories', 'AFTER', '', values)
+        elif arg_name in ('options', 'definitions'):
+            self.write_command('add_compile_' + arg_name, '', '', values)
+
+    def write(self):
+        self.output.write('cmake_minimum_required(VERSION 2.8.8)\n')
+        info("write project %s in directory \t%s" % (self.name, self.directory))
+        self.output.write('project({} LANGUAGES C CXX)\n\n'.format(self.name))
+
     def custom_target_output_args(self, compiler, target):
-        custom_target_output_config = {
-            'glib-genmarshal': '--output ',
-            'dbus-binding-tool': '--output=',
-            'moc': '-o ',
-        }
-        prefix = custom_target_output_config.get(compiler, ' ')
+        prefix = CUSTOM_TARGET_OUTPUT_CONFIG.get(compiler, ' ')
         return prefix + self.cmake_resolve_binary(target)
 
     def cmake_resolve_source(self, path):
@@ -347,7 +704,7 @@ class CmakeGenerator(PathUtils):
         relative_path = self.relpath(path).rsplit('/', 1)[-1]
         basename = os.path.basename(relative_path)
         name = basename.rsplit('.', 1)[0]
-        name = self.disallowed_characters.sub("_", name.decode('utf-8'))
+        name = DISALLOWED_CHARACTERS.sub("_", name)
         name = name if not name.startswith('lib') else name[3:]
         return self.use_target_name(name, path)
 
@@ -367,24 +724,6 @@ class CmakeGenerator(PathUtils):
                 index = index + 1
         self.used_names[name] = path
         return name
-
-    def name_by_common_prefix(self, files):
-        prefix = os.path.commonprefix(files)
-        name = os.path.basename(prefix.rstrip("-_."))
-        name = re.sub(self.disallowed_characters, "", name)
-        return name
-
-    def get_cmake_generator(self, direcoty):
-        if self.single_file or self.directory == direcoty:
-            return self
-        name = "%s-%s" % (self.name, self.relpath(direcoty))
-        generators = self.__class__.generators
-        generator = generators.get(name)
-        if generator is None:
-            generator = CmakeGenerator(self.db, name, direcoty)
-            self.output_subdirectory(direcoty)
-            generators[name] = generator
-        return generators[name]
 
     def output_subdirectory(self, directory):
         info("Project in %s add subdirectory %s"
@@ -420,14 +759,15 @@ class CmakeGenerator(PathUtils):
                     source_files.add(f)
                 continue
             if f not in self.db.objects:
-                if f.rsplit('.', 1)[-1] not in ('c', 'cpp', 'cc', 'java'):
+                if f.rsplit('.', 1)[-1] not in ('c', 'cpp', 'cc', 'java', 'qm', 'qch', 'ts', 'po'):
                     info('%s referenced %s not in linked objects as bellow\n\t%s'
                          % (self.relpath(target), f,
                             '\n\t'.join(self.db.linkings.keys())))
                 source_files.add(f)
                 continue
-            for source, com_id in self.db.objects[f].items():
-                compilations.setdefault(com_id, {})[source] = f
+            for source, cmd_id in self.db.objects[f].items():
+                if self.db.command[cmd_id].get('linkage') != 'INSTALL':
+                    compilations.setdefault(cmd_id, {})[source] = f
         if referenced_libs:
             config.setdefault('referenced_libs', set()).update(referenced_libs)
         if len(compilations) > 1:
@@ -462,7 +802,7 @@ class CmakeGenerator(PathUtils):
             return None
         if len(command_sources) > 1:
             warn("find multiple command creating the same target: %s" % f)
-        cmd_id = command_sources.keys()[0]
+        cmd_id = next(iter(command_sources.keys()))
         linkage = self.db.command[cmd_id].get('linkage')
         if linkage in ('STATIC', 'SHARED'):
             return self.name_as_target(f)
@@ -493,11 +833,18 @@ class CmakeGenerator(PathUtils):
             single_line = len(' '.join(parts)) < 40
         delimiter = ' ' if single_line else '\n    '
         tail = '' if single_line else '\n'
-        content = delimiter + (delimiter.join(parts)) + tail
-        self.output.write('%s(%s %s%s)\n\n' % (command, name, options, content))
+        if not single_line and len(' '.join(parts)) / len(parts) < 5:
+            lines = []
+            for i in range(0, (len(parts) // 10) + 1):
+                lines.append('\t'.join(parts[i*10:(i*10)+9]))
+            content = delimiter + (delimiter.join(lines)) + tail
+        else:
+            content = delimiter + (delimiter.join(parts)) + tail
+        self.output.write('%s(%s %s%s)\n' % (command, name, options, content))
 
     def output_includes(self, options, name, parts): 
-        if not parts: return
+        if not parts:
+            return
         parts = [self.get_include_path(include) for include in parts]
         info("Target %s includes %s %s" % (name, options, ' '.join(parts)))
         self.write_command('target_include_directories', options, name, parts)
@@ -509,37 +856,6 @@ class CmakeGenerator(PathUtils):
         if not parts: return
         self.write_command('target_compile_' + arg_type, 'PRIVATE', name, parts)
 
-    def write(self):
-        name = self.name
-
-        for (target, command_source) in self.db.linkings.items():
-            commands = command_source.keys()
-            if len(commands) > 1:
-                warn("target %s created by multiple command:\n%s" % (
-                    target, commands))
-            for cmd_id, files in command_source.items():
-                command = self.db.command[cmd_id]
-                directory = command['cwd']
-                linkage = command.get('linkage', 'OBJECT')
-                info("Process %s target %s" % (linkage, self.relpath(target)))
-                generator = self.get_cmake_generator(directory)
-                if linkage == 'SOURCE':
-                    generator.output_custom_command(target, cmd_id, files)
-                else:
-                    generator.output_linked_target(cmd_id, files, target, linkage)
-
-        for cmd_id, target_sources in self.db.targets.items():
-            files = set()
-            for target, sources in target_sources.items():
-                if target in self.db.linkings: continue
-                for f in sources:
-                    cmd = self.db.sources.get(f, {}).get(target, cmd_id)
-                    if cmd != cmd_id:
-                        warn("target %s gen by command %s and %s" % (target, cmd, cmd_id))
-                    files.add(f)
-            if files:
-                self.output_library(cmd_id, files)
-
     def output_custom_command(self, target, cmd_id, sources):
         config = self.db.command[cmd_id]
         info("cmd #%s output custom target %s generated from %s"
@@ -548,31 +864,62 @@ class CmakeGenerator(PathUtils):
         options = config.get('options', ())
         self.output.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s\n\t%s\n\t%s\n\t%s\n)\n"
                           % (self.relpath(target), compiler, ' '.join(options),
-                             ' '.join([self.cmake_resolve_source(f) for f in sources]),
+                             self.cmake_resolve_source('${X}'),
                              self.custom_target_output_args(compiler, target)))
 
+    def output_locales(self, cmd_id, config, dest_pattern, src_pattern, paths):
+        matcher = re.compile(src_pattern % {'0': '(.*)'})
+        fields = [matcher.match(x[0]).groups()[0] for x in paths]
+        info("Locales created by cmd #%s to %s" % (cmd_id, ' '.join(fields)))
+        self.write_command('foreach', '', 'X', fields)
+        compiler = config['compiler']
+        options = config.get('options', [])
+        self.output.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s %s\n\t%s\n\t%s\n)\n"
+                          % (self.relpath(dest_pattern % {'0': '${X}'}),
+                             compiler, ' '.join(options),
+                             self.cmake_resolve_source(src_pattern % {'0': '${X}'}),
+                             self.custom_target_output_args(
+                                 compiler, dest_pattern % {'0': '${X}'})))
+        self.output.write('endforeach(X)\n\n')
 
-    def output_library(self, cmd_id, files, libtype=None):
-        name = self.name_by_common_prefix(files)
-        if not libtype:
-            libtype = 'OBJECT'
-        config = self.db.command[cmd_id]
-        directory = config['cwd']
-        generator = self.get_cmake_generator(directory)
-        info("cmd #%s output %s library target %s with %s"
-             % (cmd_id, libtype or 'unlinked', name,
-                ' '.join([self.relpath(f) for f in files])))
-        generator.output_cmake_target(name, config, files, None, libtype)
+    def output_migrated_install(self, command, dest_pattern, file_pattern, matched):
+        self.write_command('foreach', '', 'X', matched)
+        self.output.write('install(%s\t%s\n\tDESTINATION\t%s\n)\n'
+                          % ('FILES', self.relpath(file_pattern % {'0': '${X}'}),
+                             dest_pattern % {'0': '${X}'}))
+        self.output.write('endforeach(X)\n\n')
+
+    def output_cmake_install(self, name, config, files):
+        install_groups = {}
+        for f in files:
+            source_commands = self.db.objects.get(f, None)
+            if source_commands is None:
+                warn('Could not find command to create install Target: ' + self.resolve(f))
+                install_groups.setdefault(-1, set()).add(f)
+                continue
+            cmd_id = next(iter(source_commands.values()))
+            install_groups.setdefault(cmd_id, set()).add(f)
+        for cmd_id, file_set in iter(install_groups.items()):
+            if cmd_id >= 0:
+                command = self.db.command[cmd_id]
+                linkage = command.get('linkage', 'OBJECT')
+                install_type = 'PROGRAMS' if linkage == 'EXECUTABLE' else 'FILES'
+            else:
+                install_type = 'FILES'
+            self.output.write('install(%s\n\t%s\n\tDESTINATION %s\n)\n'
+                               % (install_type,
+                                  ' '.join([self.relpath(f) for f in file_set]),
+                                  config.get('destination', 'NO-DESTINATION')))
 
     def output_cmake_target(self, name, config, files, target, libtype):
         if not files or not name: return
-        files = set([self.relpath(f) for f in files])
+        files = sorted([self.relpath(f) for f in files])
         missing_depends = config.get('missing_depends', [])
         if missing_depends:
             missing_depends = [self.relpath(f) for f in missing_depends]
             warn("Target %s depends on missing files: %s"
                  % (name, ' '.join(missing_depends)))
-            files.update(missing_depends)
+            files.extend(missing_depends)
             config['include_binary_dir'] =True
         name = self.use_target_name(name, target)
         info("Target %s output cmake %-13s: %s" % (name, libtype, ' '.join(files)))
@@ -611,7 +958,7 @@ def get_default_name(compilation_database):
             ['git', 'rev-parse', '--show-toplevel'],
             cwd=directory, stdout=subprocess.PIPE).communicate()[0]
         output = output.strip()
-        return os.path.basename(output)
+        return os.path.basename(output).decode('utf-8')
     except Exception:
         return 'autogenerated'
 
@@ -630,7 +977,7 @@ path of the compilation database (default: compile_commands.json or stdin)
     )
     outfile = 'CMakeLists.txt' if os.isatty(sys.stdout.fileno()) else '-'
     parser.add_argument(
-        'outfile', nargs='?', type=argparse.FileType('w'), default=outfile,
+        '-o', '--outfile', type=argparse.FileType('w'), default=outfile,
         help="""
 path of the CMake file (default: CMakeLists.txt or stdout)
         """
@@ -672,8 +1019,8 @@ which may be difficult to get automatically captured using a ld logger.
     if os.path.isfile(args.extra_infile):
         db.read(open(args.extra_infile, 'r'))
     single = not args.multiple_file
-    generator = CmakeGenerator(db, args.name, db.directory, single)
-    generator.write()
+    cmake_convertor = CmakeConverter(db, args.name, db.directory, single)
+    cmake_convertor.convert()
 
 
 if __name__ == '__main__':
