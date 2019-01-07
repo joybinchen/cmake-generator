@@ -47,7 +47,8 @@ def freeze(obj):
 
 def get_diff_pattern(text1, text2):
     diff_result = diff(text1, text2)
-    pattern = lhs = rhs = ''
+    pattern = []
+    lhs = rhs = ''
     fields = []
     for diff_type, diff_part in diff_result:
         if diff_type < 0:
@@ -56,12 +57,20 @@ def get_diff_pattern(text1, text2):
             rhs += diff_part
         else:
             if lhs or rhs:
-                pattern += '%%(%d)s' % len(fields)
-                fields.append((lhs, rhs))
+                if fields and len(pattern[-1]) <= 3:
+                    delimiter = pattern.pop(-1)
+                    field = fields.pop(-1)
+                    fields.append((
+                        field[0] + delimiter + lhs,
+                        field[1] + delimiter + rhs,
+                    ))
+                else:
+                    pattern.append('%%(%d)s' % len(fields))
+                    fields.append((lhs, rhs))
                 lhs = rhs = ''
-            pattern += diff_part
+            pattern.append(diff_part)
     #debug('Diff result %s for %s %s: %s' % (pattern, text1, text2, fields))
-    return pattern, fields
+    return ''.join(pattern), fields
 
 
 class PathUtils(object):
@@ -142,9 +151,10 @@ class CompilationDatabase(PathUtils):
                     linkage = 'SOURCE'
                     target = next(words)
                 elif word.startswith('-'):
-                    options.append(word)
                     if word == '--include':
-                        options.append(next(words))
+                        options.append('%s %s' % (word, next(words)))
+                    else:
+                        options.append(word)
 
         elif compiler == 'install':
             for word in words:
@@ -237,11 +247,10 @@ class CompilationDatabase(PathUtils):
             elif word == '-c':
                 linkage = 'OBJECT'
             elif word in ['-arch', '-include', '-x']:
-                options.append(word)
-                options.append(next(words))
+                options.append('%s %s' % (word, next(words)))
             elif word in ['-MM', '-MQ', '-M', '-MP', '-MG']:
                 continue
-            elif word in ['-MT', '-MF', '-MQ', '-MD', '-MMD']:
+            elif word in ['-MT', '-MF', '-MQ', '-MD', '-MMD', '-ccc-gcc-name']:
                 next(words)
             elif word.startswith('-L'):
                 libs.add(word if len(word) > 2 else ('-L'+next(words)))
@@ -630,11 +639,11 @@ class CmakeConverter(PathUtils):
         for target, sources in target_sources.items():
             for source in sources:
                 self.migrate_command(target, source, groups)
-        info("cmd #%s output locale target %s with %s"
-             % (cmd_id,
-                ' '.join([self.relpath(x[0]) for x in target_sources]),
-                ' '.join([self.relpath(x[1]) for x in target_sources])))
         for (dest_pattern, src_pattern), target_sources in groups.items():
+            info("cmd #%s output locale target\n\t%s"
+                 % (cmd_id, '\n\t'.join(
+                    ['%s <- %s' % (self.relpath(t), self.relpath(s))
+                     for t, s in target_sources])))
             generator.output_locales(
                 cmd_id, command, dest_pattern, src_pattern, target_sources)
 
@@ -833,7 +842,7 @@ class CmakeGenerator(PathUtils):
             single_line = len(' '.join(parts)) < 40
         delimiter = ' ' if single_line else '\n    '
         tail = '' if single_line else '\n'
-        if not single_line and len(' '.join(parts)) / len(parts) < 5:
+        if not single_line and len(' '.join(parts)) / len(parts) < 7:
             lines = []
             for i in range(0, (len(parts) // 10) + 1):
                 lines.append('\t'.join(parts[i*10:(i*10)+9]))
@@ -868,8 +877,11 @@ class CmakeGenerator(PathUtils):
                              self.custom_target_output_args(compiler, target)))
 
     def output_locales(self, cmd_id, config, dest_pattern, src_pattern, paths):
-        matcher = re.compile(src_pattern % {'0': '(.*)'})
-        fields = [matcher.match(x[0]).groups()[0] for x in paths]
+        if src_pattern:
+            matcher = re.compile(src_pattern % {'0': '(.*)'})
+            fields = [matcher.match(x[0]).groups()[0] for x in paths]
+        else:
+            fields = ["''"]
         info("Locales created by cmd #%s to %s" % (cmd_id, ' '.join(fields)))
         self.write_command('foreach', '', 'X', fields)
         compiler = config['compiler']
