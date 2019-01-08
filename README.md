@@ -17,7 +17,7 @@ Use [CodeChecker log -k](https://github.com/Ericsson/codechecker.git) to collect
   For examples, put following export commands in compile_commands to capture qmake, dbus-binding-tool and glib-genmarshal with meaningful input and output file recognized in the outcome compile database.
 
 > export CC_LOGGER_CUSTOM_LIKE="qmake:dbus-binding-tool:glib-genmarshal"
-> export CC_LOGGER_OUTPUT_ARG_dbus_bingding_tool="--output"
+> export CC_LOGGER_OUTPUT_ARG_dbus_binding_tool="--output"
 > export CC_LOGGER_OUTPUT_ARG_glib_genmarshal="--output"
 > export CC_LOGGER_OUTPUT_ARG_qmake='$-1'
 > export CC_LOGGER_OPTION_ARG_qmake="-install"

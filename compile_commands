@@ -20,7 +20,7 @@ export CC_LOGGER_OUTPUT_ARG_lrelease='-qm'
 export CC_LOGGER_OUTPUT_ARG_install='$-1'
 export CC_LOGGER_OPTION_ARG_install='-m'
 export CC_LOGGER_OUTPUT_ARG_msgfmt='-o:--output-file'
-export CC_LOGGER_OUTPUT_ARG_dbus_bingding_tool='--output'
+export CC_LOGGER_OUTPUT_ARG_dbus_binding_tool='--output'
 export CC_LOGGER_OUTPUT_ARG_glib_genmarshal='--output'
 echo $@
 $@
