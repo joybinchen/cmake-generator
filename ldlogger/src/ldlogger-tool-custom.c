@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <string.h>
 /**
- * States for GCCargument parser.
+ * States for custom argument parser.
  */
 
 #define PROG_LIST_SEPARATOR ":"
@@ -29,11 +29,11 @@ typedef enum _GccArgsState
    */
   Normal,
   /**
-   * After a -o paramater.
+   * After a -o parameter.
    */
   InOutputArg,
   /**
-   * After a plain option paramater. Don't recognize it as input or file.
+   * After a plain option parameter. Don't recognize it as input or file.
    */
   InOptionArg,
 } CustomArgsState;
