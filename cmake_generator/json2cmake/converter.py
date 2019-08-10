@@ -8,10 +8,7 @@ import logging
 diff = diff_match_patch().diff_main
 
 # FORMAT = '%(asctime)-15s %(levelname)-8s %(module)s %(message)s'
-FORMAT = '%(levelname)-8s %(lineno)5d %(message)s'
-logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 info = logger.info
 debug = logger.debug
 warn = logger.warning
@@ -259,7 +256,7 @@ class CmakeConverter(PathUtils):
     def get_cmake_generator(self, directory):
         if self.single_file:
             directory = self.directory
-        if directory == self.directory:
+        if directory == self.directory or directory + '/' == self.directory:
             name = self.name
         else:
             name = "%s-%s" % (self.name, self.relpath(directory))
@@ -271,7 +268,7 @@ class CmakeConverter(PathUtils):
             root_generator = self.get_root_generator()
             if root_generator != generator:
                 root_generator.output_subdirectory(directory)
-        return generators[name]
+        return generator
 
     def output_install(self, cmd_id, config, files):
         name = self.name_by_common_prefix(files)
