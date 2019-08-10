@@ -4,7 +4,6 @@ import re
 import logging
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 info = logger.info
 debug = logger.debug
 warn = logger.warning
@@ -29,9 +28,11 @@ class CmakeGenerator(PathUtils):
         self.name = name
         self.output = open(os.path.join(cwd, 'CMakeLists.txt'), 'w')
         self.single_file = single_file
-        self.output.write('cmake_minimum_required(VERSION 2.8.8)\n')
-        info("write project %s in directory \t%s" % (name, self.directory))
-        self.output.write('project({} LANGUAGES C CXX)\n\n'.format(name))
+        self.write_project_header()
+
+    def write(self, *args, **kwargs):
+        self.output.write(*args, **kwargs)
+        if logger.level >= logging.DEBUG: self.output.flush()
 
     def output_project_common_args(self, arg_name, values):
         if not values:
@@ -46,10 +47,10 @@ class CmakeGenerator(PathUtils):
         elif arg_name in ('options', 'definitions'):
             self.write_command('add_compile_' + arg_name, '', '', values)
 
-    def write(self):
-        self.output.write('cmake_minimum_required(VERSION 2.8.8)\n')
+    def write_project_header(self):
+        self.write('cmake_minimum_required(VERSION 2.8.8)\n')
         info("write project %s in directory \t%s" % (self.name, self.directory))
-        self.output.write('project({} LANGUAGES C CXX)\n\n'.format(self.name))
+        self.write('project({} LANGUAGES C CXX)\n\n'.format(self.name))
 
     def custom_target_output_args(self, compiler, target):
         prefix = CUSTOM_TARGET_OUTPUT_CONFIG.get(compiler, ' ')
@@ -95,7 +96,7 @@ class CmakeGenerator(PathUtils):
     def output_subdirectory(self, directory):
         info("Project in %s add subdirectory %s"
              % (self.db.relpath(self.directory), self.db.relpath(directory)))
-        self.output.write("add_subdirectory(%s)\n" % self.relpath(directory))
+        self.write("add_subdirectory(%s)\n" % self.relpath(directory))
 
     def output_linked_target(self, cmd_id, files, target, libtype):
         name = self.name_as_target(target)
@@ -192,8 +193,7 @@ class CmakeGenerator(PathUtils):
                   % (name, self.relpath(source), self.relpath(product)))
         else:
             warn("file %s not in source list of target %s\n\t%s\n%s" % (
-                source, product, '\n\t'.join(sources),
-                '\n'.join(["%s: %s" % x for x in cmd_id])))
+                source, product, '\n\t'.join(sources), cmd_id))
 
     def write_command(self, command, options, name, parts, single_line=None):
         if single_line is None:
@@ -207,7 +207,7 @@ class CmakeGenerator(PathUtils):
             content = delimiter + (delimiter.join(lines)) + tail
         else:
             content = delimiter + (delimiter.join(parts)) + tail
-        self.output.write('%s(%s %s%s)\n' % (command, name, options, content))
+        self.write('%s(%s %s%s)\n' % (command, name, options, content))
 
     def output_includes(self, options, name, parts):
         if not parts:
@@ -229,7 +229,7 @@ class CmakeGenerator(PathUtils):
              % (cmd_id, self.relpath(target), ' '.join([self.relpath(f) for f in sources])))
         compiler = config.get('compiler')
         options = config.get('options', ())
-        self.output.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s\n\t%s\n\t%s\n\t%s\n)\n"
+        self.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s\n\t%s\n\t%s\n\t%s\n)\n"
                           % (self.relpath(target), compiler, ' '.join(options),
                              self.cmake_resolve_source('${X}'),
                              self.custom_target_output_args(compiler, target)))
@@ -244,20 +244,20 @@ class CmakeGenerator(PathUtils):
         self.write_command('foreach', '', 'X', fields)
         compiler = config['compiler']
         options = config.get('options', [])
-        self.output.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s %s\n\t%s\n\t%s\n)\n"
+        self.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s %s\n\t%s\n\t%s\n)\n"
                           % (self.relpath(dest_pattern % {'0': '${X}'}),
                              compiler, ' '.join(options),
                              self.cmake_resolve_source(src_pattern % {'0': '${X}'}),
                              self.custom_target_output_args(
                                  compiler, dest_pattern % {'0': '${X}'})))
-        self.output.write('endforeach(X)\n\n')
+        self.write('endforeach(X)\n\n')
 
     def output_migrated_install(self, dest_pattern, file_pattern, matched):
         self.write_command('foreach', '', 'X', matched)
-        self.output.write('install(%s\t%s\n\tDESTINATION\t%s\n)\n'
+        self.write('install(%s\t%s\n\tDESTINATION\t%s\n)\n'
                           % ('FILES', self.relpath(file_pattern % {'0': '${X}'}),
                              dest_pattern % {'0': '${X}'}))
-        self.output.write('endforeach(X)\n\n')
+        self.write('endforeach(X)\n\n')
 
     def output_cmake_install(self, name, config, files):
         install_groups = {}
@@ -277,7 +277,7 @@ class CmakeGenerator(PathUtils):
                 install_type = 'PROGRAMS' if linkage == 'EXECUTABLE' else 'FILES'
             else:
                 install_type = 'FILES'
-            self.output.write('install(%s\n\t%s\n\tDESTINATION %s\n)\n'
+            self.write('install(%s\n\t%s\n\tDESTINATION %s\n)\n'
                               % (install_type,
                                  ' '.join([self.relpath(f) for f in file_set]),
                                  config.get('destination', 'NO-DESTINATION')))
