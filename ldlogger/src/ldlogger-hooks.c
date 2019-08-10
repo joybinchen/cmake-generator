@@ -69,8 +69,9 @@ static void tryLog(
   const char* loggerArgs[CC_LOGGER_MAX_ARGS];
   char* ldpreload;
 
-  char const* loggerDebug;
 #define debug if(loggerDebug) fprintf
+  fopen()
+  char const* loggerDebug;
   loggerDebug = getenv("CC_LOGGER_DEBUG");
   debug(stderr, "tryLog %s", filename_);
   loggerArgs[0] = filename_;
@@ -81,8 +82,8 @@ static void tryLog(
   }
   loggerArgs[i+1] = NULL;
   debug(stderr, "\n");
-#undef debug
   fflush(stderr);
+#undef debug
 
   logExec(i+1, (char* const*) loggerArgs);
 }

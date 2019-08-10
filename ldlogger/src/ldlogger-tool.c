@@ -10,6 +10,9 @@
 
 #include <stdlib.h>
 #include <assert.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <stdio.h>
 
 #define PROG_LIST_SEPARATOR ":"
 
@@ -33,6 +36,15 @@ static int matchToProgramList(
   char* progList;
   char* token;
   const char* progListVar = getenv(envVar_);
+  /*
+#define debug if(loggerDebug) fprintf
+  char const* loggerDebug;
+  loggerDebug = getenv("CC_LOGGER_DEBUG");
+  debug(stderr, "%s(envVar_=\"%s\", progName_=\"%s\")\n\tchecking progList=%s\n",
+        __PRETTY_FUNCTION__, envVar_, progName_, progListVar);
+  if(loggerDebug) fflush(stderr);
+#undef debug
+   */
   if (!progListVar)
   {
     return 0;
@@ -47,7 +59,21 @@ static int matchToProgramList(
   token = strtok(progList, PROG_LIST_SEPARATOR);
   while (token)
   {
-    if (strstr(progName_, token))
+    char* pos;
+    bool found;
+    pos = strstr(progName_, token);
+    found = false;
+    if (pos)
+    {
+      if (pos == progName_) {
+        if (strlen(pos) == strlen(token) || !isalpha(*(pos + strlen(token))))
+	  found = true;
+      } else {
+        if (strlen(pos) == strlen(token) || !isalpha(*(pos -1)))
+          found = true;
+      }
+    }
+    if (found)
     {
       /* Match! */
       free(progList);
