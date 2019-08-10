@@ -9,7 +9,6 @@ import json
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 info = logger.info
 debug = logger.debug
 warn = logger.warning
@@ -50,12 +49,15 @@ class CompilationDatabase(PathUtils):
         system_includes = set()
         iquote_includes = set()
         libs = set()
-        linkage = 'EXECUTABLE'
+        linkage = 'SOURCE'
         target = ''
         missing_depends = []
+        origin_compiler = compiler
 
         if compiler == 'ccache':
             compiler = 'clang'
+        if compiler in ('gcc', 'g++', 'clang', 'clang++'):
+            linkage = 'EXECUTABLE'
         if compiler == 'msgfmt':
             linkage = 'LOCALE'
         if compiler == 'git':
@@ -135,7 +137,10 @@ class CompilationDatabase(PathUtils):
                         if 'c' in word:
                             linkage = 'STATIC'
                             target = next(words)
-                    elif 'c' in word:
+                    elif 'c' in word: # create an archive
+                        linkage = 'STATIC'
+                        target = next(words)
+                    elif 'q' in word: # quick append to an archive
                         linkage = 'STATIC'
                         target = next(words)
                     else:
@@ -166,6 +171,8 @@ class CompilationDatabase(PathUtils):
                     if value:
                         define = '%s="%s"' % (name, value)
                 definitions.append(define)
+            if word == '-x' and compiler == 'clang' and next(words) == 'c++':
+                compiler = 'clang++'
             elif word == '-c':
                 linkage = 'OBJECT'
             elif word in ['-arch', '-include', '-x']:
@@ -237,7 +244,7 @@ class CompilationDatabase(PathUtils):
         if not os.path.exists(file_):
             return [file_]
 
-        dep_command = [compiler, '-MM', '-MG', file_.encode('utf-8')]
+        dep_command = [compiler, '-MM', '-MG', file_]
         dep_command.extend(['-D'+p for p in config.get('definitions', ())])
         dep_command.extend(['-I'+p for p in config.get('includes', ())])
         for p in config.get('system_includes', ()):
@@ -246,7 +253,7 @@ class CompilationDatabase(PathUtils):
             dep_command.extend(['-iquote', p])
         if '-fPIC' in config.get('options', []):
             dep_command.append('-fPIC')
-        # debug('check dependencies on %s with command: %s' %(cwd, ' '.join(dep_command)))
+        debug('check dependencies on %s with command:\n\t%s' % (cwd, ' '.join(dep_command)))
         process = subprocess.Popen(dep_command, cwd=cwd, stdout=subprocess.PIPE)
         output = process.communicate()[0].strip().decode('utf-8')
         if not output:

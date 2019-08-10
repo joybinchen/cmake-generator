@@ -8,11 +8,12 @@ from cmake_generator.json2cmake.database import CompilationDatabase
 from cmake_generator.json2cmake.converter import CmakeConverter
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 info = logger.info
 debug = logger.debug
 warn = logger.warning
 error = logger.error
+FORMAT = '%(levelname)-8s %(module)s:%(lineno)5d %(message)s'
+#logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
 def get_default_name(compilation_database):
@@ -76,6 +77,7 @@ which may be difficult to get automatically captured using a ld logger.
     )
     args = parser.parse_args()
     if args.debug:
+        logging.basicConfig(format=FORMAT, level=logging.DEBUG)
         logger.setLevel(logging.DEBUG)
 
     if args.name is None:
