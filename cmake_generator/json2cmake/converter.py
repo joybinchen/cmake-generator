@@ -1,18 +1,16 @@
-from .utils import basestring, freeze, PathUtils
-from .generator import CmakeGenerator
-from diff_match_patch.diff_match_patch import diff_match_patch
 import os
 import re
 import logging
+from diff_match_patch.diff_match_patch import diff_match_patch
+
+from .utils import *
+from .generator import CmakeGenerator
+from .target import *
 
 diff = diff_match_patch().diff_main
 
 # FORMAT = '%(asctime)-15s %(levelname)-8s %(module)s %(message)s'
-logger = logging.getLogger(__name__)
-info = logger.info
-debug = logger.debug
-warn = logger.warning
-error = logger.error
+logger, info, debug, warn, error = get_loggers(__name__)
 
 DISALLOWED_CHARACTERS = re.compile("[^A-Za-z0-9_.+\\-]")
 
@@ -173,21 +171,26 @@ class CmakeConverter(PathUtils):
 
     def convert(self):
         root_generator = self.get_root_generator()
-        for arg_name in ('includes', 'system_includes', 'iquote_includes',
-                         'options', 'definitions'):
-            values = self.simplify_command_common_args(arg_name)
-            if values:
-                root_generator.output_project_common_args(arg_name, values)
+#       for arg_name in ('includes', 'system_includes', 'iquote_includes',
+#                        'options', 'definitions'):
+#           values = self.simplify_command_common_args(arg_name)
+#           if values:
+#               root_generator.output_project_common_args(arg_name, values)
         self.migrate_install_commands()
-        self.write()
+        self.write_linked_targets()
+        self.write_unlinked_targets()
+        self.write_install_targets()
+        for name, generator in CmakeConverter.generators.items():
+            generator.write_to_file()
 
-    def write(self):
+    def write_linked_targets(self):
         for (target, command_source) in self.db.linkings.items():
             commands = command_source.keys()
             if len(commands) > 1:
                 warn("target %s created by multiple command:\n%s" % (
                     target, commands))
             for cmd_id, files in command_source.items():
+                files = sorted(files)
                 command = self.db.command[cmd_id]
                 directory = command['cwd']
                 linkage = command.get('linkage', 'OBJECT')
@@ -198,6 +201,7 @@ class CmakeConverter(PathUtils):
                 else:
                     generator.output_linked_target(cmd_id, files, target, linkage)
 
+    def write_unlinked_targets(self):
         for cmd_id, target_sources in self.db.targets.items():
             command = self.db.command[cmd_id]
             linkage = command.get('linkage', 'OBJECT')
@@ -215,11 +219,12 @@ class CmakeConverter(PathUtils):
             if files:
                 self.output_library(cmd_id, command, tuple(files), linkage)
 
+    def write_install_targets(self):
         for cmd_id, target_sources in self.db.installs.items():
             files = set()
             command = self.db.install_command[cmd_id]
             for target, source in target_sources.items():
-                if type(target) is basestring:
+                if isinstance(target, basestring):
                     files.add(source)
                     continue
                 # target is tuple
@@ -256,14 +261,14 @@ class CmakeConverter(PathUtils):
     def get_cmake_generator(self, directory):
         if self.single_file:
             directory = self.directory
-        if directory == self.directory or directory + '/' == self.directory:
+        if directory == self.directory or directory == self.directory + '/':
             name = self.name
         else:
             name = "%s-%s" % (self.name, self.relpath(directory))
         generators = self.__class__.generators
         generator = generators.get(name)
         if generator is None:
-            generator = CmakeGenerator(self.db, name, directory, self.single_file)
+            generator = CmakeGenerator(self, name, directory, self.single_file)
             generators[name] = generator
             root_generator = self.get_root_generator()
             if root_generator != generator:
@@ -300,11 +305,13 @@ class CmakeConverter(PathUtils):
                 ' '.join([self.relpath(f) for f in files])))
         generator.output_cmake_target(name, command, files, None, linkage)
 
-    @staticmethod
-    def name_by_common_prefix(files):
+    def name_by_common_prefix(self, files):
         prefix = os.path.commonprefix(files)
         name = os.path.basename(prefix.rstrip("-_."))
         name = re.sub(DISALLOWED_CHARACTERS, "", name)
+        if not name:
+            name = self.relpath(prefix).rstrip("-_.").replace('/', '_').replace('.', '_')
+            name = re.sub(DISALLOWED_CHARACTERS, "", name)
         return name
 
 

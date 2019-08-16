@@ -1,15 +1,17 @@
 import os
 import logging
 
+__all__ = ['get_loggers', 'basestring', 'PathUtils', 'freeze']
+
 if not hasattr(__builtins__, 'basestring'):
     basestring = str
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-info = logger.info
-debug = logger.debug
-warn = logger.warning
-error = logger.error
+def get_loggers(module_name):
+    log = logging.getLogger(module_name)
+    return log, log.info, log.debug, log.warning, log.error
+
+
+logger, info, debug, warn, error = get_loggers(__name__)
 
 
 def freeze(obj):
@@ -25,15 +27,20 @@ def freeze(obj):
 
 
 class PathUtils(object):
-    def __init__(self, cwd):
-        if not cwd.endswith('/'):
-            cwd = cwd + '/'
-        self.directory = str(cwd)
+    def __init__(self, directory):
+        self.directory = ''
+        self.set_directory(directory)
         self.db = self
 
+    def set_directory(self, directory):
+        while directory.endswith('/'):
+            directory = directory[:-1]
+        self.directory = str(directory)
+
     def relpath(self, path):
-        if self.directory and (path.startswith(self.db.directory)
-                               or path == self.db.directory):
+        if self.directory and (path.startswith(self.db.directory + '/')
+                               or path == self.db.directory
+                               or path.startswith(os.path.dirname(self.db.directory) + '/')):
             return os.path.relpath(path, self.directory)
         return path
 
@@ -43,6 +50,9 @@ class PathUtils(object):
         if not os.path.isabs(path):
             path = os.path.join(cwd, path)
         return os.path.normcase(os.path.normpath(path))
+
+    def joined_relpath(self, files, delimiter=' '):
+        return delimiter.join(map(self.relpath, files))
 
 
 if __name__ == '__main__':

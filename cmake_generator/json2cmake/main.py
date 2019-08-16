@@ -4,14 +4,11 @@ import sys
 import argparse
 import subprocess
 import logging
+from cmake_generator.json2cmake.utils import get_loggers
 from cmake_generator.json2cmake.database import CompilationDatabase
 from cmake_generator.json2cmake.converter import CmakeConverter
 
-logger = logging.getLogger(__name__)
-info = logger.info
-debug = logger.debug
-warn = logger.warning
-error = logger.error
+logger, info, debug, warn, error = get_loggers(__name__)
 FORMAT = '%(levelname)-8s %(module)s:%(lineno)5d %(message)s'
 #logging.basicConfig(format=FORMAT, level=logging.INFO)
 
@@ -79,6 +76,9 @@ which may be difficult to get automatically captured using a ld logger.
     if args.debug:
         logging.basicConfig(format=FORMAT, level=logging.DEBUG)
         logger.setLevel(logging.DEBUG)
+    else:
+        logging.basicConfig(format=FORMAT, level=logging.INFO)
+        logger.setLevel(logging.INFO)
 
     if args.name is None:
         args.name = get_default_name(args.infile)
