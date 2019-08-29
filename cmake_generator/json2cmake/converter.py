@@ -1,46 +1,15 @@
 import os
 import re
 import logging
-from diff_match_patch.diff_match_patch import diff_match_patch
 
 from .utils import *
+from .migration import *
 from .generator import CmakeGenerator
 from .target import *
 
-diff = diff_match_patch().diff_main
 
 # FORMAT = '%(asctime)-15s %(levelname)-8s %(module)s %(message)s'
 logger, info, debug, warn, error = get_loggers(__name__)
-
-DISALLOWED_CHARACTERS = re.compile("[^A-Za-z0-9_.+\\-]")
-
-
-def get_diff_pattern(text1, text2):
-    diff_result = diff(text1, text2)
-    pattern = []
-    lhs = rhs = ''
-    fields = []
-    for diff_type, diff_part in diff_result:
-        if diff_type < 0:
-            lhs += diff_part
-        elif diff_type > 0:
-            rhs += diff_part
-        else:
-            if lhs or rhs:
-                if fields and len(pattern[-1]) <= 3:
-                    delimiter = pattern.pop(-1)
-                    field = fields.pop(-1)
-                    fields.append((
-                        field[0] + delimiter + lhs,
-                        field[1] + delimiter + rhs,
-                    ))
-                else:
-                    pattern.append('%%(%d)s' % len(fields))
-                    fields.append((lhs, rhs))
-                lhs = rhs = ''
-            pattern.append(diff_part)
-    # debug('Diff result %s for %s %s: %s' % (pattern, text1, text2, fields))
-    return ''.join(pattern), fields
 
 
 class CmakeConverter(PathUtils):
@@ -54,209 +23,177 @@ class CmakeConverter(PathUtils):
         self.single_file = single_file
         self.common_configs = {}
 
-    def simplify_command_common_args(self, arg_name):
-        common_values = None
-        for values in [cmd.get(arg_name) for cmd in self.db.command]:
-            if values:
-                if common_values is None:
-                    common_values = list(values)
-                    continue
-                for v in common_values:
-                    if v not in values:
-                        common_values.remove(v)
-        if not common_values:
-            return None
-        self.common_configs[arg_name] = common_values
-        for command in self.db.command:
-            values = command.get(arg_name)
-            if values is None:
-                continue
-            new_values = filter(lambda x: x not in common_values, values)
-            command[arg_name] = freeze(tuple(new_values))
-        return common_values
-
-    def migrate_install_commands(self):
-        groups = {}
-        installs = list(filter(lambda x: len(x[1]) == 1, self.db.installs.items()))
-        migrated_commands = {}
-        for cmd_id, target_files in installs:
-            self.db.installs.pop(cmd_id)
-            command = self.db.install_command[cmd_id].copy()
-            command.pop('destination')
-            target, file_ = next(iter(target_files.items()))
-            freeze_command = freeze(command)
-            new_cmd_id = migrated_commands.get(freeze_command)
-            if new_cmd_id is None:
-                new_cmd_id = len(self.db.install_command)
-                migrated_commands[freeze_command] = new_cmd_id
-                self.db.install_command.append(dict(command))
-            dest_groups = groups.setdefault(freeze_command, {})
-            self.migrate_command(target, file_, dest_groups)
-            self.db.install_command[cmd_id] = None
-            debug('Install cmd #%d migrated into cmd #%d' % (cmd_id, new_cmd_id))
-
-        for command, dest_groups in groups.items():
-            cmd_id = migrated_commands[command]
-            self.db.installs[cmd_id] = dest_groups
-
-    def migrate_command(self, target, source, groups):
-        if not groups:
-            info('Initialize empty group with source & target\n\t%s => %s'
-                 % (target, source))
-            groups[(target, '')] = [(source, target), ]
-            return True
-
-        for (dest, src_pattern), file_targets in groups.items():
-            if src_pattern:
-                matcher = re.compile(src_pattern % {'0': '(.*)'})
-                matched = matcher.match(source)
-                if matched:
-                    match_groups = matched.groups()
-                    convert_dict = dict([(str(i), g) for i, g in
-                                         zip(range(0, len(match_groups)), match_groups)])
-                    converted_target = dest % convert_dict
-                    if converted_target == target:
-                        file_targets.append((source, target))
-                        debug(('Existed pattern\t%s\t%s\n\t' % (src_pattern, dest)) +
-                              ('matches source and target\t%s\t%s\n' % (source, target)))
-                        return True
-
-        for (dest, src_pattern), file_targets in groups.items():
-            prev_pattern = src_pattern or file_targets[0][0]
-            file_pattern, file_fields = get_diff_pattern(
-                prev_pattern, source)
-            if len(file_fields) != 1: continue
-            dest_pattern, dest_fields = get_diff_pattern(dest, target)
-            if not dest_pattern: continue
-            debug('\n\t'.join([
-                'Found pattern %s with fields %s for' % (dest_pattern, dest_fields),
-                dest, target,
-                'src_pattern=\t' + src_pattern,
-                'file_pattern=\t' + file_pattern
-            ]))
-
-            field_dict = {}
-            pattern_ok = True
-            for field in dest_fields:
-                if field not in file_fields:
-                    pattern_ok = False
-                    break
-                field_dict[str(file_fields.index(field))] = field[1]
-            if not pattern_ok: continue
-
-            info('migrating under %s\t%s\n''got\t%s\n\t%s\n''for\t%s\n\t%s\nand\t%s'
-                 % (prev_pattern, field_dict,
-                    dest_pattern, target,
-                    file_pattern, source,
-                    '\n\t'.join(["%s <- %s" % (t, self.relpath(f))
-                                 for f, t in file_targets[:3]])))
-            file_targets.append((source, target))
-            if src_pattern != file_pattern:
-                if src_pattern:
-                    matcher = re.compile(file_pattern % {'0': '(.*)'})
-                    for file_, target in file_targets:
-                        if not matcher.match(file_):
-                            return True
-                    info('migrate_command when %s\n\t replace\t%s\n\t ===>\t%s\n targets:\n\t%s'
-                         % ((source, target),
-                            (dest, src_pattern),
-                            (dest_pattern, file_pattern),
-                            '\n\t'.join(["%s\t%s" % x for x in file_targets])))
-                groups.pop((dest, src_pattern))
-                groups[(dest_pattern, file_pattern)] = file_targets
-            return True
-        info('No matching pattern %s in groups' % target)
-        groups[(target, '')] = [(source, target), ]
-        return True
+    def root_dir(self):
+        return self.db.directory
 
     def convert(self):
-        root_generator = self.get_root_generator()
-#       for arg_name in ('includes', 'system_includes', 'iquote_includes',
-#                        'options', 'definitions'):
-#           values = self.simplify_command_common_args(arg_name)
-#           if values:
-#               root_generator.output_project_common_args(arg_name, values)
-        self.migrate_install_commands()
-        self.write_linked_targets()
-        self.write_unlinked_targets()
-        self.write_install_targets()
-        for name, generator in CmakeConverter.generators.items():
+        for target, command_source in self.db.linkings.items():
+            self.write_linked_target(target, command_source)
+        for cmd_id, target_sources in self.db.targets.items():
+            self.write_unlinked_target(cmd_id, target_sources)
+        migrated_commands = self.db.extract_migrated_commands()
+        for cmd_id, destination_sources in migrated_commands.items():
+            self.write_migrated_install_target(cmd_id, destination_sources)
+        for cmd_id, destination_sources in self.db.installs.items():
+            self.write_install_target(cmd_id, set(destination_sources.values()))
+        destinations = set()
+        for d in migrated_commands.values():
+            for dest, _ in d.keys():
+                destinations.add(dest)
+        for d in self.db.installs.values():
+            for dest in d.keys():
+                destinations.add(dest)
+        external_destinations = tuple(filter(lambda d: not d.startswith(self.directory), destinations))
+        cmake_install_prefix = os.path.commonpath(external_destinations)
+        for generator in CmakeConverter.generators.values():
+            generator.set_install_prefix(cmake_install_prefix)
             generator.write_to_file()
 
-    def write_linked_targets(self):
-        for (target, command_source) in self.db.linkings.items():
-            commands = command_source.keys()
-            if len(commands) > 1:
-                warn("target %s created by multiple command:\n%s" % (
-                    target, commands))
-            for cmd_id, files in command_source.items():
-                files = sorted(files)
-                command = self.db.command[cmd_id]
-                directory = command['cwd']
-                linkage = command.get('linkage', 'OBJECT')
-                info("Process %s target %s" % (linkage, self.relpath(target)))
-                generator = self.get_cmake_generator(directory)
-                if linkage == 'SOURCE':
-                    generator.output_custom_command(target, cmd_id, files)
-                else:
-                    generator.output_linked_target(cmd_id, files, target, linkage)
-
-    def write_unlinked_targets(self):
-        for cmd_id, target_sources in self.db.targets.items():
+    def write_linked_target(self, target, command_source):
+        commands = command_source.keys()
+        if len(commands) > 1:
+            warn("target %s created by multiple command:\n%s" % (target, commands))
+        for cmd_id, files in command_source.items():
+            files = sorted(files)
             command = self.db.command[cmd_id]
-            linkage = command.get('linkage', 'OBJECT')
-            if linkage == 'LOCALE':
-                self.output_locales(cmd_id, command, target_sources)
+            files.extend(command.missing_depends)
+            directory = command.cwd
+            linkage = command.linkage
+            info("Process %s target %s" % (linkage, self.relpath(target)))
+            generator = self.get_cmake_generator(directory)
+            if linkage == 'SOURCE':
+                generator.output_custom_command(target, cmd_id, files)
                 continue
-            files = set()
-            for target, source in target_sources.items():
-                if target in self.db.linkings: continue
-                for f in source:
-                    cmd = self.db.sources.get(f, {}).get(target, cmd_id)
-                    if cmd != cmd_id:
-                        warn("target %s gen by command %s and %s" % (target, cmd, cmd_id))
-                    files.add(f)
-            if files:
-                self.output_library(cmd_id, command, tuple(files), linkage)
 
-    def write_install_targets(self):
-        for cmd_id, target_sources in self.db.installs.items():
-            files = set()
-            command = self.db.install_command[cmd_id]
-            for target, source in target_sources.items():
-                if isinstance(target, basestring):
-                    files.add(source)
-                    continue
-                # target is tuple
-                if target[1]:
-                    self.output_migrated_install(cmd_id, target, source)
-                    continue
-                if len(source) != 1:
-                    warn("Install target %s fail to migrate by install cmd #%s" % (target, cmd_id))
-                for f in source:
-                    command['destination'] = f[0]
-                    files.add(f[1])
-            if files:
-                self.output_install(cmd_id, command, tuple(files))
+            output_name = generator.name_for_lib(target)
+            debug("%s %s linked by cmd #%s from %s"
+                  % (linkage, self.relpath(target), cmd_id, self.joined_relpath(files)))
+            source_files, referenced_libs, compilations, depends = self.classify_source_files(files, target)
+            command = command.copy()
+            self.update_referenced_libs(command, referenced_libs)
+            self.migrate_sub_compilations(command, compilations, target, output_name)
+            generator.output_linked_target(command, source_files, target, linkage, output_name, depends)
 
-    def output_migrated_install(self, cmd_id, patterns, files):
-        dest_pattern, file_pattern = patterns
-        if not file_pattern:
-            self.output_install(cmd_id, self.db.install_command[cmd_id], files)
-        matcher = re.compile(file_pattern % {'0': '(.*)'})
-        matched = []
-        for file_, target in files:
-            match = matcher.match(file_)
-            if match.groups():
-                matched.append(match.groups()[0])
-            else:
-                debug('Fail to match %s in %s' % (file_pattern, file_))
+    def classify_source_files(self, files, target):
+        source_files = set()
+        referenced_libs = {}
+        compilations = {}
+        dependencies = set()
+        for f in files:
+            if f in self.db.linkings:
+                dependencies.add(f)
+                info('%s refer linked target %s' % (self.relpath(target), self.relpath(f)))
+                linkage = self.db.target_linkage(f)
+                if linkage in ('STATIC', 'SHARED', 'SOURCE'):
+                    referenced_libs[f] = linkage
+                else:
+                    source_files.add(f)
+                continue
+            if f not in self.db.objects:
+                ext = os.path.splitext(f)[1]
+                if ext == '.a':
+                    referenced_libs[f] = 'STATIC'
+                elif ext in ('.so', '.dll'):
+                    referenced_libs[f] = 'SHARED'
+                else:
+                    if ext not in ('.c', '.cpp', '.cc', '.java', '.qm', '.qch', '.ts', '.po'):
+                        info('%s referenced %s not in linked objects as bellow\n\t%s'
+                             % (self.relpath(target), f, '\n\t'.join(self.db.linkings.keys())))
+                    source_files.add(f)
+                continue
+            for source, cmd_id in self.db.objects[f].items():
+                if self.db.command_linkage(cmd_id) != 'INSTALL':
+                    compilations.setdefault(cmd_id, {})[source] = f
+                source_files.add(source)
+        return source_files, referenced_libs, compilations, dependencies
+
+    @staticmethod
+    def update_referenced_libs(config, referenced_libs):
+        config.referenced_libs.update(referenced_libs)
+        for refer in referenced_libs:
+            if refer.startswith('${CMAKE'):
+                config.include_binary_dir = True
+                break
+
+    def migrate_sub_compilations(self, config, compilations, target, name):
+        if len(compilations) > 1:
+            warn("Target %s is created by multiple commands: %s"
+                 % (self.db.relpath(target), ' '.join(["#%s" % cmd for cmd in compilations])))
+        for cmd_id in compilations.keys():
+            config.migrate(self.db.command[cmd_id])
+        for cmd_id, source_product in compilations.items():
+            for source, product in source_product.items():
+                if self.reduce_target(cmd_id, product, source):
+                    debug("Target %s use source %-20s instead of %s"
+                          % (name, self.relpath(source), self.relpath(product)))
+                if self.db.is_generated(source):
+                    config.include_binary_dir = True
+
+    def reduce_target(self, cmd_id, product, source):
+        target_sources = self.db.targets.get(cmd_id, {})
+        sources = target_sources.get(product, set())
+        if source in sources:
+            sources.remove(source)
+            if not sources:
+                target_sources.pop(product)
+                debug("pop %s from targets of cmd #%s" % (self.relpath(product), cmd_id))
+            return True
+        else:
+            info("file %s not in source list of target %s\n\t%s\n%s %s" % (
+                source, product, '\n\t'.join(sources), cmd_id, '' if sources else target_sources))
+        return False
+
+    def write_unlinked_target(self, cmd_id, target_sources):
+        if not target_sources: return
+        command = self.db.command[cmd_id]
+        linkage = command.linkage
+        if linkage == 'LOCALE':
+            self.output_locales(cmd_id, command, target_sources)
+            return
+        files = set()
+        for target, source in target_sources.items():
+            if target in self.db.linkings: continue
+            for f in source:
+                cmd = self.db.sources.get(f, {}).get(target, cmd_id)
+                if cmd != cmd_id:
+                    warn("target %s gen by command %s and %s" % (target, cmd, cmd_id))
+                files.add(f)
+        if files:
+            files.update(command.missing_depends)
+            self.output_library(cmd_id, command, sorted(files), linkage)
+
+    def write_migrated_install_target(self, cmd_id, destination_sources):
         command = self.db.install_command[cmd_id]
-        generator = self.get_cmake_generator(command['cwd'])
-        generator.output_migrated_install(dest_pattern, file_pattern, matched)
+        generator = self.get_cmake_generator(command.cwd)
+        files = set()
+        for destination, sources in destination_sources.items():
+            dest_pattern, file_pattern = destination
+            if file_pattern:
+                matched = get_matched_parts(file_pattern, [s for t, s in sources])
+                generator.output_migrated_install(command, dest_pattern, file_pattern, matched)
+                continue
+            if len(sources) != 1:
+                warn("Install target %s fail to migrate by install cmd #%s" % (destination, cmd_id))
+            for f in sources:
+                command.destination = f[0]
+                files.add(f[1])
+        if files: self.write_install_target(cmd_id, files)
+
+    def write_install_target(self, cmd_id, files):
+        command = self.db.install_command[cmd_id]
+        generator = self.get_cmake_generator(command.cwd)
+        name = name_by_common_prefix(list(files), self.root_dir())
+        info("Target %s installed by cmd #%s to %s" % (name, cmd_id, ' '.join([self.relpath(f) for f in files])))
+        install_groups = group_keys_by_vv(files, self.db.objects)
+        for cmd_id, file_set in install_groups.items():
+            linkage = self.db.command_linkage(cmd_id) if cmd_id >= 0 else 'FILES'
+            generator.output_cmake_install(name, command, file_set, linkage)
 
     def get_root_generator(self):
-        return self.get_cmake_generator(self.db.directory)
+        return self.get_cmake_generator(self.root_dir())
+
+    def get_cmd_generator(self, cmd_id):
+        return self.get_cmake_generator(self.db.command_cwd(cmd_id))
 
     def get_cmake_generator(self, directory):
         if self.single_file:
@@ -275,44 +212,25 @@ class CmakeConverter(PathUtils):
                 root_generator.output_subdirectory(directory)
         return generator
 
-    def output_install(self, cmd_id, config, files):
-        name = self.name_by_common_prefix(files)
-        directory = config['cwd']
-        generator = self.get_cmake_generator(directory)
-        info("Target %s installed by cmd #%s to %s"
-             % (name, cmd_id, ' '.join([self.relpath(f) for f in files])))
-        generator.output_cmake_install(name, config, files)
-
     def output_locales(self, cmd_id, command, target_sources):
-        generator = self.get_cmake_generator(command['cwd'])
         groups = {}
         for target, sources in target_sources.items():
             for source in sources:
-                self.migrate_command(target, source, groups)
+                migrate_command(target, source, groups)
+        generator = self.get_cmake_generator(command.cwd)
         for (dest_pattern, src_pattern), target_sources in groups.items():
             info("cmd #%s output locale target\n\t%s"
                  % (cmd_id, '\n\t'.join(
-                    ['%s <- %s' % (self.relpath(t), self.relpath(s))
-                     for t, s in target_sources])))
-            generator.output_locales(
-                cmd_id, command, dest_pattern, src_pattern, target_sources)
+                    ['%s <- %s' % (self.relpath(t), self.relpath(s)) for t, s in target_sources])))
+            generator.output_locales(cmd_id, command, dest_pattern, src_pattern, target_sources)
 
     def output_library(self, cmd_id, command, files, linkage):
-        generator = self.get_cmake_generator(command['cwd'])
-        name = self.name_by_common_prefix(files)
+        generator = self.get_cmake_generator(command.cwd)
+        name = name_by_common_prefix(files, self.directory)
         info("cmd #%s output %s library target %s with %s"
              % (cmd_id, linkage or 'unlinked', name,
                 ' '.join([self.relpath(f) for f in files])))
-        generator.output_cmake_target(name, command, files, None, linkage)
-
-    def name_by_common_prefix(self, files):
-        prefix = os.path.commonprefix(files)
-        name = os.path.basename(prefix.rstrip("-_."))
-        name = re.sub(DISALLOWED_CHARACTERS, "", name)
-        if not name:
-            name = self.relpath(prefix).rstrip("-_.").replace('/', '_').replace('.', '_')
-            name = re.sub(DISALLOWED_CHARACTERS, "", name)
-        return name
+        generator.output_linked_target(command, files, '', linkage, name, [])
 
 
 if __name__ == '__main__':

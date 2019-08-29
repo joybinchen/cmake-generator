@@ -7,25 +7,31 @@ from .target import *
 
 logger, info, debug, warn, error = get_loggers(__name__)
 
-DISALLOWED_CHARACTERS = re.compile("[^A-Za-z0-9_.+\\-]")
-
 
 class CmakeGenerator(PathUtils):
     used_names = {"": ""}
 
     def __init__(self, converter, name, cwd, single_file=False):
         super(self.__class__, self).__init__(cwd)
-        self.converter = converter
         self.db = converter.db
         self.name = name
         self.output = self.stream = StringIO() # open(os.path.join(cwd, 'CMakeLists.txt'), 'w')
         self.single_file = single_file
+        # targets: {t.name: t, t.target: t, }
         self.targets = {}
+        self.other_installs = []
         self.common_configs = {}
+        self.install_prefix = '/'
+
+    def command_linkage(self, cmd_id):
+        return self.db.command_linkage(cmd_id)
 
     def write(self, *args, **kwargs):
         self.output.write(*args, **kwargs)
         if logger.level >= logging.DEBUG: self.output.flush()
+
+    def set_install_prefix(self, prefix):
+        self.install_prefix = prefix
 
     def write_to_file(self):
         self.output = open(os.path.join(self.directory, 'CMakeLists.txt'), 'w')
@@ -38,13 +44,34 @@ class CmakeGenerator(PathUtils):
         self.write_targets()
 
     def write_targets(self):
-        for target in self.targets.values():
+        for target in set(self.targets.values()):
+            target.bind(self)
+            target.output_target()
+        for target in self.merged_wrapped_targets(self.other_installs):
             target.bind(self)
             target.output_target()
 
+    @staticmethod
+    def merged_wrapped_targets(targets):
+        merged_targets = []
+        for target in targets:
+            if not isinstance(target, WrappedTarget):
+                merged_targets.append(target)
+                continue
+            merged = False
+            for other in merged_targets:
+                if type(other) == type(target) and other.sources == target.sources:
+                    for child in target.children:
+                        other.append_child(child)
+                    merged = True
+                    break
+            if not merged:
+                merged_targets.append(target)
+        return merged_targets
+
     def simplify_command_common_args(self, arg_name):
         common_values = None
-        for values in [target.command.get(arg_name) for target in self.targets.values()]:
+        for values in [getattr(target.command, arg_name) for target in self.targets.values()]:
             if values:
                 if common_values is None:
                     common_values = list(values)
@@ -80,20 +107,16 @@ class CmakeGenerator(PathUtils):
         self.write('project({} LANGUAGES C CXX)\n\n'.format(self.name))
 
         for target in self.targets.values():
-            if target.command.get('use_thread'):
+            if target.command.use_thread:
                 self.write('find_package(Threads)\n')
                 break
 
-
     def custom_target_output_args(self, compiler, target):
-        prefix = CustomGenerated.CUSTOM_TARGET_OUTPUT_CONFIG.get(compiler, ' ')
-        return prefix + self.cmake_resolve_binary(target)
+        prefix = CustomCommandTarget.CUSTOM_TARGET_OUTPUT_CONFIG.get(compiler, ' ')
+        return prefix + cmake_resolve_binary(target, self.directory)
 
     def cmake_resolve_source(self, path):
         return "${CMAKE_CURRENT_SOURCE_DIR}/%s" % self.relpath(path)
-
-    def cmake_resolve_binary(self, path):
-        return "${CMAKE_CURRENT_BINARY_DIR}/%s" % self.relpath(path)
 
     def get_include_path(self, include_path):
         if include_path.startswith(self.db.directory + '/') \
@@ -102,12 +125,7 @@ class CmakeGenerator(PathUtils):
         return include_path
 
     def name_for_lib(self, path):
-        relative_path = self.relpath(path)
-        basename = os.path.basename(relative_path)
-        name = os.path.splitext(basename)[0]
-        name = DISALLOWED_CHARACTERS.sub("_", name)
-        name = name if not name.startswith('lib') else name[3:]
-        return name
+        return PathUtils.name_for_target(self.relpath(path))
 
     def name_as_target(self, path):
         output_name = self.name_for_lib(path)
@@ -139,118 +157,27 @@ class CmakeGenerator(PathUtils):
              % (self.db.relpath(self.directory), self.db.relpath(directory)))
         self.write("add_subdirectory(%s)\n" % self.relpath(directory))
 
-    def output_linked_target(self, cmd_id, files, target, libtype):
-        name, output_name = self.name_as_target(target)
-        debug("%s %s linked by cmd #%s from %s"
-              % (libtype, self.relpath(target), cmd_id, self.joined_relpath(files)))
-        config = {k: v for (k, v) in self.db.command[cmd_id].items()}
-        source_files, config, depends = self.migrate_sub_compilations(config, files, target, name)
+    def output_linked_target(self, command, files, target, libtype, name, depends):
         debug("Target %s output linked %s %s for %s"
-              % (name, libtype, self.relpath(target), self.joined_relpath(source_files)))
-        # self.output_cmake_target(name, config, source_files, target, libtype)
-        ######
+              % (name, libtype, self.relpath(target), self.joined_relpath(files)))
         if not libtype or libtype == 'EXECUTABLE':
-            linked_target = Executable(config, target, source_files)
+            name = self.use_target_name(name, target)
+            linked_target = ExecutableTarget(command, target, files)
         else:
-            linked_target = Library(config, target, source_files, libtype)
+            output_name = PathUtils.name_for_target(target)
+            library = self.targets.get(output_name)
+            if (isinstance(library, LibraryTarget)
+                    and set(files) == library.sources
+                    and {'STATIC', 'SHARED'} == {library.libtype, library}):
+                library.libtype = ''
+                self.targets[target] = library
+                return
+            name = self.use_target_name(name, target)
+            linked_target = LibraryTarget(command, target, files, libtype)
         linked_target.set_name(name)
         linked_target.add_depends(depends)
         self.targets[name] = linked_target
-
-    def migrate_sub_compilations(self, config, files, target, name):
-        source_files = set()
-        referenced_libs = set()
-        compilations = {}
-        dependences = set()
-        for f in files:
-            ext = os.path.splitext(f)[1]
-            if f in self.db.linkings:
-                dependences.add(f)
-                refer = self.refer_linked_target(f)
-                info('%s refer linked target %s' % (self.relpath(target), self.relpath(refer or f)))
-                if refer:
-                    if refer.startswith('${CMAKE'):
-                        config['include_binary_dir'] = True
-                    referenced_libs.add(refer)
-                else:
-                    source_files.add(f)
-                continue
-            if f not in self.db.objects:
-                if ext not in ('c', 'cpp', 'cc', 'java', 'qm', 'qch', 'ts', 'po'):
-                    info('%s referenced %s not in linked objects as bellow\n\t%s'
-                         % (self.relpath(target), f, '\n\t'.join(self.db.linkings.keys())))
-                if ext == '.a':
-                    referenced_libs.add(f)
-                else:
-                    source_files.add(f)
-                continue
-            for source, cmd_id in self.db.objects[f].items():
-                if self.db.command[cmd_id].get('linkage') != 'INSTALL':
-                    compilations.setdefault(cmd_id, {})[source] = f
-                    # dependences.add(f)
-        if referenced_libs:
-            config.setdefault('referenced_libs', set()).update(referenced_libs)
-        if len(compilations) > 1:
-            warn("Target %s is created by multiple commands: %s"
-                 % (self.db.relpath(target),
-                    ' '.join(["#%s" % cmd for cmd in compilations])))
-        for cmd_id, source_product in compilations.items():
-            for k, v in self.db.command[cmd_id].items():
-                value = config.get(k, v)
-                if type(value) in (set, tuple, frozenset):
-                    value = list(value)
-                    config[k] = value
-                if isinstance(value, list):
-                    for part in v:
-                        if part not in value:
-                            value.append(part)
-                elif v and not config.get(k):
-                    config[k] = v
-            for source, product in source_product.items():
-#               relpath = self.relpath(source)
-#               if relpath.find('/'):
-#                   source_dir = os.path.dirname(source)
-#                   generator = self.converter.get_cmake_generator(source_dir)
-#                   generator.
-                self.reduce_target(source, cmd_id, product, name)
-                if source in self.db.linkings:
-                    command_sources = self.db.linkings[source]
-                    for cid in command_sources.keys():
-                        if self.db.command[cid]['linkage'] == 'SOURCE':
-                            config['include_binary_dir'] = True
-                source_files.add(source)
-        return source_files, config, dependences
-
-    def refer_linked_target(self, f):
-        command_sources = self.db.linkings[f]
-        if not command_sources:
-            return None
-        if len(command_sources) > 1:
-            warn("find multiple command creating the same target: %s" % f)
-        cmd_id = next(iter(command_sources.keys()))
-        linkage = self.db.command[cmd_id].get('linkage')
-        if linkage in ('STATIC', 'SHARED'):
-            return f
-        elif linkage == 'SOURCE':
-            refer = self.cmake_resolve_binary(f)
-            debug("refer generated source %s" % refer)
-            return refer
-        return None
-
-    def reduce_target(self, source, cmd_id, product, name):
-        target_sources = self.db.targets.get(cmd_id, {})
-        sources = target_sources.get(product, set())
-        if source in sources:
-            sources.remove(source)
-            if not sources:
-                target_sources.pop(product)
-                debug("pop %s from targets of cmd #%s"
-                      % (self.relpath(product), cmd_id))
-            debug("Target %s use source %-20s instead of %s"
-                  % (name, self.relpath(source), self.relpath(product)))
-        else:
-            info("file %s not in source list of target %s\n\t%s\n%s %s" % (
-                source, product, '\n\t'.join(sources), cmd_id, '' if sources else target_sources))
+        self.targets[target] = linked_target
 
     def write_command(self, command, options, name, parts, single_line=None):
         if single_line is None:
@@ -273,126 +200,71 @@ class CmakeGenerator(PathUtils):
         info("Target %s includes %s %s" % (name, options, ' '.join(parts)))
         self.write_command('target_include_directories', options, name, parts)
 
-    def output_compile_args(self, arg_type, name, config):
-        parts = config.get(arg_type, ())
-        info("Target %s output compile %-11s: %s"
-             % (name, arg_type, ' '.join(parts)))
+    def output_compile_args(self, arg_type, name, parts):
+        info("Target %s output compile %-11s: %s" % (name, arg_type, ' '.join(parts)))
         if not parts: return
         self.write_command('target_compile_' + arg_type, 'PRIVATE', name, parts)
 
     def output_custom_command(self, target, cmd_id, sources):
         config = self.db.command[cmd_id]
         name, output_name = self.name_as_target(target)
-        self.targets[name] = CustomGenerated(config, target, sources)
+        self.targets[target] = CustomCommandTarget(config, target, sources)
         if name != output_name:
-            self.targets[name].set_name(name)
+            self.targets[target].set_name(name)
         return
         info("cmd #%s output custom target %s generated from %s"
              % (cmd_id, self.relpath(target), self.joined_relpath(sources)))
-        compiler = config.get('compiler')
-        options = config.get('options', ())
+        compiler = config.compiler
+        options = config.options
         self.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s\n\t%s\n\t%s\n\t%s\n)\n"
                           % (self.relpath(target), compiler, ' '.join(options),
                              self.cmake_resolve_source('${X}'),
                              self.custom_target_output_args(compiler, target)))
 
-    def output_locales(self, cmd_id, config, dest_pattern, src_pattern, paths):
+    def output_locales(self, cmd_id, command, dest_pattern, src_pattern, paths):
         if src_pattern:
             matcher = re.compile(src_pattern % {'0': '(.*)'})
             fields = [matcher.match(x[0]).groups()[0] for x in paths]
         else:
             fields = ["''"]
         info("Locales created by cmd #%s to %s" % (cmd_id, ' '.join(fields)))
+        dest = dest_pattern % {'0': '${X}'}
+        source = src_pattern % {'0': '${X}'}
+        custom_command = CustomCommandTarget(command, dest, [source, ])
+        wrapper = ForeachTargetWrapper(command, 'X', fields)
+        wrapper.append_child(custom_command)
+        self.other_installs.append(wrapper)
+        return
+        compiler = command.compiler
+        output_args = self.custom_target_output_args(compiler, dest_pattern % {'0': '${X}'})
         self.write_command('foreach', '', 'X', fields)
-        compiler = config['compiler']
-        options = config.get('options', [])
         self.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s %s\n\t%s\n\t%s\n)\n"
-                          % (self.relpath(dest_pattern % {'0': '${X}'}),
-                             compiler, ' '.join(options),
-                             self.cmake_resolve_source(src_pattern % {'0': '${X}'}),
-                             self.custom_target_output_args(
-                                 compiler, dest_pattern % {'0': '${X}'})))
+                   % (self.relpath(dest), compiler, ' '.join(command.options),
+                      self.cmake_resolve_source(source), output_args))
         self.write('endforeach(X)\n\n')
 
-    def output_migrated_install(self, dest_pattern, file_pattern, matched):
-        self.write_command('foreach', '', 'X', matched)
-        self.write('install(%s\t%s\n\tDESTINATION\t%s\n)\n'
-                          % ('FILES', self.relpath(file_pattern % {'0': '${X}'}),
-                             dest_pattern % {'0': '${X}'}))
-        self.write('endforeach(X)\n\n')
+    def output_migrated_install(self, command, dest_pattern, file_pattern, matched, var='X'):
+        child_target = InstallTarget(command, dest_pattern, [file_pattern, ])
+        target = ForeachTargetWrapper(command, var, matched)
+        target.append_child(child_target)
+        self.other_installs.append(target)
 
-    def output_cmake_install(self, name, config, files):
-        install_groups = {}
-        for f in files:
-            source_commands = self.db.objects.get(f, None)
-            if source_commands is None:
-                if not os.path.isfile(f):
-                    warn('Target %s without a command to create installed file: %s'
-                         % (name, self.resolve(f)))
-                install_groups.setdefault(-1, set()).add(f)
-                continue
-            cmd_id = next(iter(source_commands.values()))
-            install_groups.setdefault(cmd_id, set()).add(f)
-        for cmd_id, file_set in iter(install_groups.items()):
-            if cmd_id >= 0:
-                command = self.db.command[cmd_id]
-                linkage = command.get('linkage', 'OBJECT')
-                install_type = 'PROGRAMS' if linkage == 'EXECUTABLE' else 'FILES'
+    def output_cmake_install(self, name, command, file_set, linkage):
+        directories = []
+        files = []
+        destination = command.destination if command.destination else command.target
+        for f in file_set:
+            if f in self.targets:
+                self.targets[f].add_destination(destination)
+            elif linkage != 'EXECUTABLE' and os.path.isdir(f):
+                directories.append(f)
             else:
-                install_type = 'FILES'
-
-            if install_type == 'FILES':
-                directories = []
-                for f in file_set:
-                    if os.path.isdir(f):
-                        directories.append(f)
-                if directories:
-                    for f in directories:
-                        file_set.remove(f)
-                    self.write('install(%s\n\t%s\n\tDESTINATION %s\n)\n'
-                               % ('DIRECTORY', self.joined_relpath(directories, '\n\t'),
-                                  config.get('destination', 'NO-DESTINATION')))
-                    if not file_set: return
-
-            self.write('install(%s\n\t%s\n\tDESTINATION %s\n)\n'
-                       % (install_type, self.joined_relpath(file_set, '\n\t'),
-                          config.get('destination', 'NO-DESTINATION')))
-
-    def output_cmake_target(self, name, config, files, target, libtype):
-        if not files or not name: return
-        files = sorted(map(self.relpath, files))
-        missing_depends = config.get('missing_depends', [])
-        if missing_depends:
-            missing_depends = list(map(self.relpath, missing_depends))
-            warn("Target %s depends on missing files: %s"
-                 % (name, ' '.join(missing_depends)))
-            files.extend(missing_depends)
-            config['include_binary_dir'] = True
-        target_name = self.use_target_name(name, target)
-        info("Target %s output cmake %-13s: %s" % (target_name, libtype, ' '.join(files)))
-        if not libtype or libtype == 'EXECUTABLE':
-            self.write_command('add_executable', '', target_name, files)
-        else:
-            self.write_command('add_library', libtype, target_name, files)
-        self.output_target_config(target_name, config)
-
-    def output_target_config(self, name, config):
-        self.output_compile_args('options', name, config)
-        self.output_compile_args('definitions', name, config)
-        if config.get('include_binary_dir'):
-            self.output_includes('PRIVATE', name, ['${CMAKE_CURRENT_BINARY_DIR}'])
-        self.output_includes('PRIVATE', name, config.get('includes'))
-        self.output_includes('SYSTEM PRIVATE', name, config.get('system_includes'))
-        self.output_includes('BEFORE PRIVATE', name, config.get('iquote_includes'))
-        self.output_target_libs(name, config)
-
-    def output_target_libs(self, name, config):
-        libs = config.get('referenced_libs', set()).copy()
-        if libs:
-            debug("Target %s using referenced libs %s" % (name, ' '.join(libs)))
-        libs.update(config.get('libs', set()))
-        if libs:
-            self.write_command('target_link_libraries', 'PRIVATE', name, libs)
+                files.append(f)
+        if directories:
+            self.other_installs.append(InstallTarget(command, name, directories, 'DIRECTORY'))
+        if files:
+            install_type = linkage if linkage == 'EXECUTABLE' else 'FILES'
+            self.other_installs.append(InstallTarget(command, name, files, install_type))
 
 
 if __name__ == '__main__':

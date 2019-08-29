@@ -1,0 +1,71 @@
+import os
+import subprocess
+from .utils import get_loggers, resolve
+
+__all__ = ['find_dependencies', ]
+logger, info, debug, warn, error = get_loggers(__name__)
+
+
+def find_dependencies(file_, config, directory):
+    cwd = config.cwd
+    if not cwd.endswith('/'):
+        cwd += '/'
+    file_ = resolve(file_, cwd)
+    if not os.path.exists(file_):
+        return [file_, ]
+
+    depend_file = get_depend_file_name(file_, cwd)
+    if os.path.exists(depend_file):
+        output = open(depend_file).read().strip()
+    else:
+        output = extract_dependencies(file_, cwd, config)
+        open(depend_file, 'wb').write(output)
+    if not output:
+        return []
+
+    output = output.replace('\\\n  ', '')
+    lines = output.split('\n')
+    missing_depends = collect_dependencies(lines, cwd, directory)
+    return [resolve(d, directory) for d in missing_depends]
+
+
+def collect_dependencies(lines, cwd, directory):
+    i = 0
+    missing_depends = set()
+    for line in lines:
+        i += 1
+        if line.find(': ') <= 0: continue
+        depends = line.split(': ', 1)[1].split(' ')
+        depend_list = [f if os.path.isabs(f) else cwd + f for f in depends]
+        debug('Files relative to %s in %s %s\n\t%s' % (i, len(lines), directory, list(
+            filter(lambda x: x.find(':') >= 0, depend_list))))
+        depend_list = [os.path.relpath(f, directory) for f in depend_list]
+        local_depends = filter(lambda x: not x.startswith('../'), depend_list)
+        missing_depends.update(filter(lambda x: not os.path.exists(x), local_depends))
+    return missing_depends
+
+
+def get_depend_file_name(file_, cwd):
+    depend_dir = os.path.join(cwd, '.deps')
+    if not os.path.exists(depend_dir):
+        os.mkdir(depend_dir)
+    basename = os.path.splitext(os.path.basename(file_))[0]
+    depend_file = os.path.join(cwd, '.deps', basename + '.Po')
+    return depend_file
+
+
+def extract_dependencies(file_, cwd, config):
+    dep_command = [config.compiler, '-MM', '-MG', file_]
+    dep_command.extend(['-D' + p for p in config.definitions])
+    dep_command.extend(['-I' + p for p in config.includes])
+    for p in config.system_includes:
+        dep_command.extend(['-isystem', p])
+    for p in config.iquote_includes:
+        dep_command.extend(['-iquote', p])
+    if '-fPIC' in config.options:
+        dep_command.append('-fPIC')
+    debug('check dependencies on %s with command:\n\t%s' % (cwd, ' '.join(dep_command)))
+    process = subprocess.Popen(dep_command, cwd=cwd, stdout=subprocess.PIPE)
+    output = process.communicate()[0].strip()
+    output = output.decode('utf-8')
+    return output

@@ -1,8 +1,9 @@
+import os
 import traceback
-from .utils import get_loggers, basestring
+from .utils import PathUtils, get_loggers, basestring, cmake_resolve_binary
 
-__all__ = ['CmakeTarget', 'CppTarget', 'Executable', 'Library', 'Locale',
-           'OutputWithIndent', 'CustomGenerated', 'WrappedTarget', ]
+__all__ = ['CmakeTarget', 'CppTarget', 'ExecutableTarget', 'LibraryTarget', 'LocaleTarget', 'InstallTarget',
+           'OutputWithIndent', 'CustomCommandTarget', 'WrappedTarget', 'ForeachTargetWrapper']
 
 logger, info, debug, warn, error = get_loggers(__name__)
 
@@ -23,31 +24,35 @@ class OutputWithIndent(object):
         self.stream.write(delimiter.join(lines))
 
     def writeln(self, content):
-        self.write(content)
         self.stream.write('\n')
+        self.write(content)
         self.indented = False
         self.stream.flush()
 
     def finish(self):
         if self.stream:
             self.writeln(None)
-        self.stream = None
 
-    def write_command(self, command, options, name, parts):
+    def write_command(self, command, options, name, parts, tail=''):
+        single_line = len(' '.join(parts)) < 40
+        delimiter = ' ' if single_line else '\n\t'
+        if options: options = ' ' + options
+        if tail: tail = delimiter + tail
         if isinstance(parts, basestring):
-            content = ' ' + parts
+            content = ' ' + parts + tail
         else:
-            single_line = len(' '.join(parts)) < 40
-            delimiter = ' ' if single_line else '\n\t' + self.indent
-            tail = '' if single_line else '\n'
+            if not single_line:
+                tail += '\n'
             if not single_line and len(' '.join(parts)) / len(parts) < 7:
                 lines = []
                 for i in range(0, (len(parts) // 10) + 1):
                     lines.append('\t'.join(parts[i * 10:(i * 10) + 9]))
                 content = delimiter + (delimiter.join(lines)) + tail
-            else:
+            elif parts or tail:
                 content = delimiter + (delimiter.join(parts)) + tail
-        self.writeln('%s(%s %s%s)' % (command, name, options, content))
+            else:
+                content = ''
+        self.writeln('%s(%s%s%s)' % (command, name, options, content))
 
     def set_property(self, target_type, targets, property_name, values):
         if not isinstance(targets, basestring):
@@ -58,28 +63,26 @@ class OutputWithIndent(object):
 
 
 class CmakeTarget(object):
-    def __init__(self, command, target, sources):
+    def __init__(self, command, target, sources, name=None):
         self.command = command
         self.common_configs = {}
-        self.compiler = command.get('compiler', 'cmake')
+        self.compiler = command.compiler
         self.target = target
         self.sources = set()
-        self.libs = command.get('libs', set())
-        self.missing_depends = command.get('missing_depends', [])
-        self.include_binary_dir = command.get('include_binary_dir', False)
-        self.referenced_libs = command.get('referenced_libs', set())
-        self.name_ = None
+        self.libs = command.libs
+        self.include_binary_dir = command.include_binary_dir
+        self.referenced_libs = command.referenced_libs
+        self.name_ = name if name else os.path.basename(target)
         self.directory = None
         self.parent = None
         self.generator = None
         self.output = None
         self.indent = 0
         self.depends = set()
-        self.destination = None
+        self.destinations = set()
         self.output_name = None
         if sources:
             self.add_sources(sources)
-        pass
 
     def bind(self, generator):
         self.generator = generator
@@ -92,7 +95,7 @@ class CmakeTarget(object):
         return self.name_
 
     def get_name(self):
-        name, output_name = self.generator.name_as_target(self.target)
+        output_name = PathUtils.name_for_target(self.target)
         if self.name_ is None: traceback.print_stack()
         return output_name
 
@@ -102,6 +105,18 @@ class CmakeTarget(object):
     def set_command(self, command):
         self.command.update(command)
 
+    def set_destination(self, destination):
+        self.destinations.add(destination)
+
+    def get_destinations(self):
+        destinations = []
+        prefix = self.generator.install_prefix
+        for destination in self.destinations:
+            if destination == prefix or destination.startswith(prefix + '/'):
+                destination = os.path.relpath(destination, prefix)
+            destinations.append(destination)
+        return destinations
+
     def add_sources(self, sources):
         self.sources.update(sources)
 
@@ -109,7 +124,7 @@ class CmakeTarget(object):
         return sorted(self.sources)
 
     def get_values(self, name):
-        values = list(self.command.get(name, []))
+        values = list(getattr(self.command, name))
         for common in self.common_configs.get(name, []):
             if common in values: values.remove(common)
         return values
@@ -117,15 +132,15 @@ class CmakeTarget(object):
     def add_depends(self, depends):
         self.depends.update(depends)
 
-    def install_target(self, destination):
-        self.destination = destination
+    def add_destination(self, destination):
+        self.destinations.add(destination)
 
     def set_parent(self, parent):
         indent = 1 if parent else 0
         if self.parent:
             indent -= 1
         self.parent = parent
-        if not indent:
+        if indent:
             self.increase_indent(indent)
 
     def increase_indent(self, indent=1):
@@ -137,34 +152,24 @@ class CmakeTarget(object):
     def command_options(self):
         return ''
 
-    def output_target(self):
+    def output_target(self, pattern_replace={}):
         if self.generator is None:
             raise Exception('generator is None')
         command = self.cmake_command()
         options = self.get_options()
         name = self.name()
-        sources = self.get_sources()
+        sources = [s % pattern_replace for s in self.get_sources()]
         self.output.write_command(command, options, name, sources)
         self.output.finish()
 
     def write_command(self, command, options, name, parts):
         return self.output.write_command(command, options, name, parts)
 
-    def output_cmake_target(self, name, config, files, target, libtype):
-        files = sorted(map(self.generator.relpath, files))
-        if self.missing_depends:
-            missing_depends = list(map(self.generator.relpath, self.missing_depends))
-            warn("Target %s depends on missing files: %s" % (name, ' '.join(missing_depends)))
-            files.extend(missing_depends)
-            self.include_binary_dir = True
-        if not files or not name: return
-        target_name = self.generator.use_target_name(name, target)
-        info("Target %s output cmake %-13s: %s" % (target_name, libtype, ' '.join(files)))
-        if not libtype or libtype == 'EXECUTABLE':
-            self.write_command('add_executable', '', target_name, files)
-        else:
-            self.write_command('add_library', libtype, target_name, files)
-        self.output_target_config(target_name)
+    def install_files(self, install_type, destination, sources):
+        if isinstance(sources, basestring):
+            sources = [sources, ]
+        sources = [os.path.relpath(s, self.directory) for s in sources]
+        self.output.write_command('install', '', install_type, sources, 'DESTINATION ' + destination)
 
     def cmake_resolve_source(self, path):
         return "${CMAKE_CURRENT_SOURCE_DIR}/%s" % self.generator.relpath(path)
@@ -174,7 +179,7 @@ class CppTarget(CmakeTarget):
     def __init__(self, command, target, sources=None):
         super(CppTarget, self).__init__(command, target, sources)
 
-    def output_target(self):
+    def output_target(self, pattern_replace={}):
         command = self.cmake_command()
         options = self.command_options()
         name = self.name()
@@ -183,7 +188,7 @@ class CppTarget(CmakeTarget):
         var_name = name.upper() + '_SRCS'
         var_refer = '${%s}' % var_name
         self.output_list_definition(var_name, parts)
-        if self.command.get('compile_c_as_cxx'):
+        if self.command.compile_c_as_cxx:
             self.write_command('set_source_files_properties', 'PROPERTIES', var_refer, 'LANGUAGE CXX')
         self.write_command(command, options, name, var_refer)
         if name != output_name:
@@ -192,6 +197,8 @@ class CppTarget(CmakeTarget):
         if self.depends:
             depends = sorted([self.generator.name_as_target(path)[0] for path in self.depends])
             self.write_command('add_dependencies', '', name, depends)
+        for destination in self.get_destinations():
+            self.install_files('TARGETS', destination, self.name())
         self.output.finish()
 
     def get_options(self):
@@ -250,28 +257,38 @@ class CppTarget(CmakeTarget):
 
     def output_target_libs(self, name):
         libs = set()
-        for lib in self.referenced_libs:
+        for lib, linkage in self.referenced_libs.items():
             if lib in self.generator.db.linkings:
                 target_name, output_name = self.generator.name_as_target(lib)
                 libs.add(target_name)
             else:
-                libs.add(lib)
+                refer = self.refer_linked_target(lib, linkage)
+                libs.add(refer if refer else lib)
         if libs:
             debug("Target %s using referenced libs %s" % (name, ' '.join(libs)))
         libs.update(self.libs)
         if libs:
             self.write_command('target_link_libraries', 'PRIVATE', name, sorted(libs))
 
+    def refer_linked_target(self, f, linkage):
+        if linkage in ('STATIC', 'SHARED'):
+            return f
+        elif linkage == 'SOURCE':
+            refer = cmake_resolve_binary(f, self.generator.directory, self.generator.root_dir())
+            debug("refer generated source %s" % refer)
+            return refer
+        return None
 
-class Executable(CppTarget):
+
+class ExecutableTarget(CppTarget):
     def __init__(self, command, target, sources=None):
-        super(Executable, self).__init__(command, target, sources)
+        super(ExecutableTarget, self).__init__(command, target, sources)
 
     def cmake_command(self):
         return 'add_executable'
 
 
-class Library(CppTarget):
+class LibraryTarget(CppTarget):
     def __init__(self, command, target, sources=None, libtype='STATIC'):
         super(self.__class__, self).__init__(command, target, sources)
         self.libtype = libtype
@@ -283,12 +300,12 @@ class Library(CppTarget):
         return self.libtype
 
 
-class Locale(CmakeTarget):
+class LocaleTarget(CmakeTarget):
     def __init__(self, command, target, sources=None):
         super(self.__class__, self).__init__(command, target, sources)
 
 
-class CustomGenerated(CmakeTarget):
+class CustomCommandTarget(CmakeTarget):
     CUSTOM_TARGET_OUTPUT_CONFIG = {
         'glib-genmarshal': '--output ',
         'dbus-binding-tool': '--output=',
@@ -296,31 +313,68 @@ class CustomGenerated(CmakeTarget):
         'msgfmt': '-o ',
     }
 
-    def __init__(self, command, target, sources=None):
+    def __init__(self, command, target, sources):
         super(self.__class__, self).__init__(command, target, sources)
-        self.compiler = command.get('compiler')
 
-    def output_target(self):
-        info("cmd #%s output custom target %s generated from %s"
-             % (self.command['cmd_id'], self.relpath(self.target), self.joined_relpath(self.sources)))
-        self.generator.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s\n\t%s\n\t%s\n\t%s\n)\n"
-                             % (self.generator.relpath(self.target),
-                                self.compiler,
-                                ' '.join(self.options),
-                                self.cmake_resolve_source('${X}'),
-                                self.custom_target_output_args()
-                                ))
+    def output_target(self, pattern_replace={}):
+        target = 'OUTPUT ' + self.generator.relpath(self.target % pattern_replace)
+        command_line = 'COMMAND %s %s' % (self.compiler, ' '.join(self.command.options))
+        parts = []
+        parts.append(command_line)
+        parts += [s % pattern_replace for s in self.get_sources()]
+        output_args = self.custom_target_output_args()
+        self.output.write_command('add_custom_command', '', target, parts, output_args)
+        self.output.finish()
 
     def custom_target_output_args(self):
-        prefix = CustomGenerated.CUSTOM_TARGET_OUTPUT_CONFIG.get(self.compiler, ' ')
-        return prefix + self.cmake_resolve_binary(self.target)
+        prefix = CustomCommandTarget.CUSTOM_TARGET_OUTPUT_CONFIG.get(self.compiler, ' ')
+        return prefix + cmake_resolve_binary(self.target, self.generator.directory)
+
+
+class InstallTarget(CmakeTarget):
+    def __init__(self, command, target, sources, linkage='FILES'):
+        super(InstallTarget, self).__init__(command, target, sources)
+        if linkage == 'EXECUTABLE':
+            self.install_type = 'PROGRAMS'
+        elif linkage == 'DIRECTORY':
+            self.install_type = linkage
+        else:
+            self.install_type = 'FILES'
+        self.destinations.add(target)
+
+    def output_target(self, pattern_replace={}):
+        for destination in self.get_destinations():
+            destination = destination % pattern_replace
+            sources = [s % pattern_replace for s in self.get_sources()]
+            self.install_files(self.install_type, destination, sources)
+        if not self.indent:
+            self.output.finish()
 
 
 class WrappedTarget(CmakeTarget):
     def __init__(self, command, target, sources=None):
-        super(self.__class__, self).__init__(command, target, sources)
+        super(WrappedTarget, self).__init__(command, target, sources)
         self.children = []
 
-    def add_child(self, child):
+    def append_child(self, child):
         child.set_parent(self)
         self.children.append(child)
+
+
+class ForeachTargetWrapper(WrappedTarget):
+    def __init__(self, command, target, sources):
+        super(ForeachTargetWrapper, self).__init__(command, target, sources)
+
+    def bind(self, generator):
+        super(ForeachTargetWrapper, self).bind(generator)
+        for child in self.children:
+            child.bind(generator)
+
+    def output_target(self, pattern_replace={}):
+        self.write_command('foreach', '', self.name(), self.get_sources())
+        pattern_replace = pattern_replace.copy()
+        pattern_replace.update({str(self.indent): '${%s}' % self.name()})
+        for child in self.children:
+            child.output_target(pattern_replace)
+        self.write_command('endforeach', '', self.name(), [])
+        self.output.finish()
