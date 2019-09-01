@@ -39,14 +39,10 @@ command_line_moc = [
 
 class TestCommand(unittest.TestCase):
     def setUp(self):
-        self.output = StringIO()
-        self.generator = MockCmakeGenerator(self.output, os.getcwd())
         self.maxDiff = 2048
 
     def test_command_cxx(self):
         """test class CmakeTarget"""
-        output_text = ''
-        self.assertEqual(self.output.getvalue(), output_text)
         cwd = "/git/gdb"
         source = "/git/gdb/dictionary.c"
         command_line = command_line_cxx
@@ -90,8 +86,6 @@ class TestCommand(unittest.TestCase):
 
     def test_command_c(self):
         """test class CmakeTarget"""
-        output_text = ''
-        self.assertEqual(self.output.getvalue(), output_text)
         cwd = "/git/gdb"
         source = "/git/gdb/dictionary.c"
         x_pos = command_line_cxx.index('-x')
