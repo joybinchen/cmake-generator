@@ -42,7 +42,7 @@ class TestCommand(unittest.TestCase):
         self.maxDiff = 2048
 
     def test_command_cxx(self):
-        """test class CmakeTarget"""
+        """test command parse for g++ and clang++"""
         cwd = "/git/gdb"
         source = "/git/gdb/dictionary.c"
         command_line = command_line_cxx
@@ -85,7 +85,7 @@ class TestCommand(unittest.TestCase):
         self.assertEqual(freeze(command), freeze(expected_command))
 
     def test_command_c(self):
-        """test class CmakeTarget"""
+        """test command parse for gcc and clang"""
         cwd = "/git/gdb"
         source = "/git/gdb/dictionary.c"
         x_pos = command_line_cxx.index('-x')
@@ -111,6 +111,7 @@ class TestCommand(unittest.TestCase):
         self.assertEqual(freeze(command), freeze(expected_command))
 
     def test_command_qmake_install(self):
+        """test command parse for qmake -install qinstall"""
         cwd = "/git/goldendict"
         command_line = "/usr/lib/qt5/bin/qmake -install qinstall -exe goldendict /usr/local/bin/goldendict"
         source = "goldendict"
@@ -126,6 +127,7 @@ class TestCommand(unittest.TestCase):
         self.assertEqual(freeze(command), freeze(expected_command))
 
     def test_command_install(self):
+        """test command parse for install"""
         cwd = "/git/gdb/data-directory"
         command_line = "/usr/bin/install -c -m 644 ../syscalls/gdb-syscalls.dtd syscalls"
         source = "/git/gdb/syscalls/gdb-syscalls.dtd"
@@ -154,6 +156,7 @@ class TestCommand(unittest.TestCase):
         self.assertEqual(freeze(command), freeze(expected_command))
 
     def test_command_moc(self):
+        """test command parse for Qt moc"""
         cwd = '/git/goldendict'
         command_line = command_line_moc
         source = '/git/goldendict/mainwindow.hh'
