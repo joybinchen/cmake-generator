@@ -1,6 +1,6 @@
 import os
 import traceback
-from .utils import PathUtils, get_loggers, basestring, cmake_resolve_binary
+from .utils import PathUtils, relpath, resolve, get_loggers, basestring, cmake_resolve_binary
 
 __all__ = ['CmakeTarget', 'CppTarget', 'ExecutableTarget', 'LibraryTarget', 'LocaleTarget', 'InstallTarget',
            'OutputWithIndent', 'CustomCommandTarget', 'WrappedTarget', 'ForeachTargetWrapper']
@@ -73,7 +73,6 @@ class CmakeTarget(object):
         self.include_binary_dir = command.include_binary_dir
         self.referenced_libs = command.referenced_libs
         self.name_ = name if name else os.path.basename(target)
-        self.directory = None
         self.parent = None
         self.generator = None
         self.output = None
@@ -112,9 +111,7 @@ class CmakeTarget(object):
         destinations = []
         prefix = self.generator.install_prefix
         for destination in self.destinations:
-            if destination == prefix or destination.startswith(prefix + '/'):
-                destination = os.path.relpath(destination, prefix)
-            destinations.append(destination)
+            destinations.append(relpath(destination, prefix))
         return destinations
 
     def add_sources(self, sources):
@@ -168,7 +165,7 @@ class CmakeTarget(object):
     def install_files(self, install_type, destination, sources):
         if isinstance(sources, basestring):
             sources = [sources, ]
-        sources = [os.path.relpath(s, self.directory) for s in sources]
+        sources = [self.generator.relpath(s) for s in sources]
         self.output.write_command('install', '', install_type, sources, 'DESTINATION ' + destination)
 
     def cmake_resolve_source(self, path):
@@ -274,7 +271,7 @@ class CppTarget(CmakeTarget):
         if linkage in ('STATIC', 'SHARED'):
             return f
         elif linkage == 'SOURCE':
-            refer = cmake_resolve_binary(f, self.generator.directory, self.generator.root_dir())
+            refer = cmake_resolve_binary(f, self.generator.directory, self.generator.root_dir)
             debug("refer generated source %s" % refer)
             return refer
         return None
@@ -316,9 +313,21 @@ class CustomCommandTarget(CmakeTarget):
     def __init__(self, command, target, sources):
         super(self.__class__, self).__init__(command, target, sources)
 
+    def get_options(self):
+        values = list(self.command.options)
+        for inc in self.command.includes:
+            inc = self.generator.relpath(inc)
+            if not os.path.isabs(inc):
+                inc = '${CMAKE_CURRENT_SOURCE_DIR}/' + inc
+            option_arg = '-I' if PathUtils.isdir(inc) else '--include '
+            values.append(option_arg + inc)
+        for define in self.command.definitions:
+            values.append('-D' + define)
+        return values
+
     def output_target(self, pattern_replace={}):
         target = 'OUTPUT ' + self.generator.relpath(self.target % pattern_replace)
-        command_line = 'COMMAND %s %s' % (self.compiler, ' '.join(self.command.options))
+        command_line = 'COMMAND %s %s' % (self.compiler, ' '.join(self.get_options()))
         parts = []
         parts.append(command_line)
         parts += [s % pattern_replace for s in self.get_sources()]

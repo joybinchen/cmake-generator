@@ -1,32 +1,32 @@
 import os
 import subprocess
-from .utils import get_loggers, resolve
+from .utils import get_loggers, resolve, resolve_paths
 
 __all__ = ['find_dependencies', ]
 logger, info, debug, warn, error = get_loggers(__name__)
 
 
-def find_dependencies(file_, config, directory):
-    cwd = config.cwd
+def find_dependencies(file_, command, root_dir):
+    cwd = command.cwd
     if not cwd.endswith('/'):
         cwd += '/'
     file_ = resolve(file_, cwd)
     if not os.path.exists(file_):
-        return [file_, ]
+        return []
 
     depend_file = get_depend_file_name(file_, cwd)
     if os.path.exists(depend_file):
         output = open(depend_file).read().strip()
     else:
-        output = extract_dependencies(file_, cwd, config)
+        output = extract_dependencies(command, file_, cwd)
         open(depend_file, 'wb').write(output)
     if not output:
         return []
 
     output = output.replace('\\\n  ', '')
     lines = output.split('\n')
-    missing_depends = collect_dependencies(lines, cwd, directory)
-    return [resolve(d, directory) for d in missing_depends]
+    missing_depends = collect_dependencies(lines, cwd, root_dir)
+    return resolve_paths(missing_depends, root_dir)
 
 
 def collect_dependencies(lines, cwd, directory):
@@ -54,18 +54,23 @@ def get_depend_file_name(file_, cwd):
     return depend_file
 
 
-def extract_dependencies(file_, cwd, config):
-    dep_command = [config.compiler, '-MM', '-MG', file_]
-    dep_command.extend(['-D' + p for p in config.definitions])
-    dep_command.extend(['-I' + p for p in config.includes])
-    for p in config.system_includes:
-        dep_command.extend(['-isystem', p])
-    for p in config.iquote_includes:
-        dep_command.extend(['-iquote', p])
-    if '-fPIC' in config.options:
-        dep_command.append('-fPIC')
-    debug('check dependencies on %s with command:\n\t%s' % (cwd, ' '.join(dep_command)))
-    process = subprocess.Popen(dep_command, cwd=cwd, stdout=subprocess.PIPE)
+def extract_dependencies(command, source, cwd):
+    command_line = compose_denpend_command(command, source)
+    debug('check dependencies on %s with command:\n\t%s' % (cwd, ' '.join(command_line)))
+    process = subprocess.Popen(command_line, cwd=cwd, stdout=subprocess.PIPE)
     output = process.communicate()[0].strip()
     output = output.decode('utf-8')
     return output
+
+
+def compose_denpend_command(command, source):
+    command_line = [command.compiler, '-MM', '-MG', source]
+    command_line.extend(['-D' + p for p in command.definitions])
+    command_line.extend(['-I' + p for p in command.includes])
+    for p in command.system_includes:
+        command_line.extend(['-isystem', p])
+    for p in command.iquote_includes:
+        command_line.extend(['-iquote', p])
+    if '-fPIC' in command.options:
+        command_line.append('-fPIC')
+    return command_line

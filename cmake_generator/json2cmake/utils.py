@@ -3,7 +3,7 @@ import re
 import logging
 
 __all__ = ['get_loggers', 'basestring', 'PathUtils', 'freeze', 'DISALLOWED_CHARACTERS',
-           'resolve', 'relpath', 'cmake_resolve_binary']
+           'resolve', 'resolve_paths', 'relpath', 'cmake_resolve_binary']
 
 if not hasattr(__builtins__, 'basestring'):
     basestring = str
@@ -37,6 +37,10 @@ def resolve(path, cwd):
     return os.path.normcase(os.path.normpath(path))
 
 
+def resolve_paths(paths, cwd):
+    return [resolve(path, cwd) for path in paths]
+
+
 def relpath(path, base, root=None):
     if not root:
         root = base
@@ -50,19 +54,16 @@ def relpath(path, base, root=None):
 def cmake_resolve_binary(path, base):
     return "${CMAKE_CURRENT_BINARY_DIR}/%s" % relpath(path, base)
 
-
 class PathUtils(object):
-    def __init__(self, directory):
-        self.directory = ''
-        self.set_directory(directory)
+    def __init__(self, directory, root_dir):
+        self.directory = str(directory).rstrip('/')
+        self.root_dir = self.str(root_dir).rstrip('/')
 
     def set_directory(self, directory):
-        while directory.endswith('/'):
-            directory = directory[:-1]
-        self.directory = str(directory)
+        self.directory = str(directory).rstrip('/')
 
-    def relpath(self, path, root=None):
-        return relpath(path, self.directory, root)
+    def relpath(self, path):
+        return relpath(path, self.directory, self.root_dir)
 
     def resolve(self, path, cwd=None):
         return resolve(path, cwd if cwd else self.directory)
@@ -77,6 +78,10 @@ class PathUtils(object):
         name = DISALLOWED_CHARACTERS.sub("_", name)
         name = name if not name.startswith('lib') else name[3:]
         return name
+
+    @staticmethod
+    def isdir(path):
+        return os.path.isdir(path) or path.endswith('/') or os.path.splitext(path)[1] == ''
 
 
 if __name__ == '__main__':

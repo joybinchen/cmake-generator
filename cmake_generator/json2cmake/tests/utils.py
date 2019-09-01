@@ -1,19 +1,27 @@
 import os
-from cmake_generator.json2cmake.command import CompileCommand
+from ..command import Command
+from ..generator import CmakeGenerator
 
-__all__ = ['create_command', 'MockCmakeGenerator']
+__all__ = ['create_command', 'parse_command', 'MockCmakeGenerator', 'CWD', 'DIR']
+DIR = os.path.dirname(__file__)
+CWD = os.getcwd()
 
 
 def create_command(compiler, **kwargs):
-    command = CompileCommand(compiler, os.getcwd())
+    command = Command(compiler, CWD)
     command.__dict__.update(kwargs)
     return command
+
+
+def parse_command(command_line, source, cwd=CWD, root_dir=DIR):
+    return Command.parse(command_line, source, cwd, root_dir)
 
 
 class MockCmakeGenerator:
     def __init__(self, output, directory):
         self.output = output
         self.directory = directory
+        self.root_dir = directory
         self.install_prefix = '/usr/local'
         self.common_configs = {}
 
@@ -28,5 +36,4 @@ class MockCmakeGenerator:
         name = os.path.basename(target)
         return name, name
 
-    def relpath(self, path):
-        return os.path.relpath(path, self.directory)
+    relpath = CmakeGenerator.relpath

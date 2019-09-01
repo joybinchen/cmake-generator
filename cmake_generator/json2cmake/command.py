@@ -1,8 +1,11 @@
 import os
 import shlex
-from .utils import basestring, resolve, relpath
+from .utils import freeze, basestring, resolve, relpath, get_loggers
+from .denpendency import find_dependencies
 
-__all__ = ['CompileCommand', 'resolve_destination']
+
+__all__ = ['Command', 'resolve_destination']
+logger, info, debug, warn, error = get_loggers(__name__)
 
 
 def resolve_destination(path, cwd, source):
@@ -18,12 +21,13 @@ def resolve_destination(path, cwd, source):
     return target, destination
 
 
-class CompileCommand(object):
+class Command(object):
     id = None
     destination = None
     compile_c_as_cxx = False
     use_thread = False
     include_binary_dir = False
+    type = ''
 
     def __init__(self, compiler, cwd):
         self.compiler = compiler
@@ -39,8 +43,12 @@ class CompileCommand(object):
         self.missing_depends = set()
         self.linkage = 'SOURCE'
 
+    def __repr__(self):
+        children = ', '.join('%s=%s' % it for it in sorted(filter(lambda it: it[1], self.__dict__.items())))
+        return "%s{%s}" % (self.__class__.__name__, children)
+
     def copy(self):
-        other = CompileCommand(self.compiler, self.cwd)
+        other = Command(self.compiler, self.cwd)
         other.migrate(self)
         return other
 
@@ -61,30 +69,31 @@ class CompileCommand(object):
             elif v and not getattr(self, k, None):
                 setattr(self, k, v)
 
+    @staticmethod
+    def parse(command_line, source, cwd, root_dir):
+        if isinstance(command_line, basestring):
+            command_line = shlex.split(command_line)
+        words = filter(lambda t: t, command_line)
+        compiler = os.path.basename(next(words))  # remove the initial 'cc' / 'c++'
+        if compiler.startswith('python'):
+            compiler = os.path.basename(next(words))
+
+        command = Command(compiler, cwd)
+        target = command.parse_command(words, source, root_dir)
+        target = resolve(target, cwd)
+        return command, target
+
     def parse_command(self, words, source, root_dir):
         if self.compiler == 'ccache':
             self.compiler = 'clang'
-        if self.compiler in ('gcc', 'g++', 'clang', 'clang++'):
-            self.linkage = 'EXECUTABLE'
         if self.compiler == 'msgfmt':
             self.linkage = 'LOCALE'
 
-        if self.compiler == 'git':
-            target = self.parse_git(words)
-        elif self.compiler == 'moc':
-            target = self.parse_moc(words)
-        elif self.compiler == 'install':
-            target = self.parse_install(words, source, self.cwd)
-        elif self.compiler == 'qmake':
-            target = self.parse_qmake(words, source, self.cwd)
-        elif self.compiler == 'lrelease':
-            target = self.parse_lrelease(words)
-        elif self.compiler == 'glib-genmarshal':
-            target = self.parse_genmarshal(words)
-        elif self.compiler == 'dbus-binding-tool':
-            target = self.parse_dbus_binding_tool(words)
-        elif self.compiler.endswith("ar"):
+        parser_function = getattr(self, 'parse_' + self.compiler.replace('-', '_'), None)
+        if self.compiler.endswith("ar"):
             target = self.parse_ar(words)
+        elif parser_function:
+            target = parser_function(words, source)
         else:
             target = self.parse_cxx(words, root_dir)
 
@@ -93,6 +102,8 @@ class CompileCommand(object):
         return target
 
     def parse_cxx(self, words, root_dir, target=''):
+        if self.compiler in ('gcc', 'g++', 'clang', 'clang++'):
+            self.linkage = 'EXECUTABLE'
         for word in words:
             if word == '-o':
                 target = next(words)
@@ -111,11 +122,8 @@ class CompileCommand(object):
                 if include not in self.iquote_includes:
                     self.iquote_includes.append(include)
             elif word.startswith('-D'):
-                define = word[2:]
-                if define.find('=') > 0:
-                    name, value = define.split('=', 1)
-                    if value:
-                        define = '%s="%s"' % (name, value)
+                define = next(words) if word == '-D' else word[2:]
+                define = self.process_arg_define(define)
                 self.definitions.append(define)
             elif word.startswith('-Wl,'):
                 target = self.parse_link_option(word, target, root_dir)
@@ -158,7 +166,19 @@ class CompileCommand(object):
 
         return target
 
-    def parse_git(self, words, target=''):
+    @staticmethod
+    def process_arg_define(define):
+        if define.find('=') > 0:
+            name, value = define.split('=', 1)
+            if value[:1] == '"' and value[-1:] == '"':
+                value = value[1:-1]
+            elif value[:1] == "'" and value[-1:] == "'":
+                value = value[1:-1]
+            if value:
+                define = '%s="%s"' % (name, value)
+        return define
+
+    def parse_git(self, words, source, target=''):
         for word in words:
             if word == '>':
                 target = next(words)
@@ -168,44 +188,67 @@ class CompileCommand(object):
                 self.options.append(word)
         return target
 
-    def parse_moc(self, words, target=''):
+    def parse_moc(self, words, source, target=''):
         for word in words:
             if word == '-o':
                 target = next(words)
             elif word.startswith('-'):
-                if word == '--include':
-                    self.options.append('%s %s' % (word, next(words)))
+                if word.startswith('-D'):
+                    define = next(words) if len(word) == 2 else word[2:]
+                    define = self.process_arg_define(define)
+                    self.definitions.append(define)
+                elif word.startswith('-I'):
+                    including = next(words) if len(word) == 2 else word[2:]
+                    self.includes.append(resolve(including, self.cwd))
+                elif word == '--include':
+                    including = next(words)
+                    self.includes.append(resolve(including, self.cwd))
                 else:
                     self.options.append(word)
         return target
 
-    def parse_install(self, words, source, cwd, target=''):
+    def parse_install(self, words, source, target=''):
+        self.linkage = 'INSTALL'
         for word in words:
             if word.startswith('-'):
-                if word == '-c':
-                    self.options.append(word)
                 if word == '-m':
-                    self.options.append("%s %s" % (word, next(words)))
+                    mode = next(words)
+                    self.options.append("%s %s" % (word, mode))
+                    for m in mode:
+                        if int(m) % 1 != 0:
+                            self.type = 'EXECUTABLE'
+                            break
+                    if 'EXECUTABLE' != self.type:
+                        self.type = 'FILES'
                 else:
                     self.options.append(word)
             elif word != source:
-                self.linkage = 'INSTALL'
-                target, self.destination = resolve_destination(word, cwd, source)
+                target, self.destination = resolve_destination(word, self.cwd, source)
         return target
 
-    def parse_qmake(self, words, source, cwd, target=''):
+    def parse_qmake(self, words, source, target=''):
         for word in words:
             if word.startswith('-'):
                 if word == '-install':
-                    self.options.append("%s %s" % (word, next(words)))
+                    self.linkage = 'INSTALL'
+                    subcommand = next(words)
+                    if subcommand == 'qinstall':
+                        next_word = next(words)
+                        if next_word == '-exe':
+                            subcommand += ' ' + next_word
+                            self.type = 'EXECUTABLE'
+                        else:
+                            # next_word is source
+                            # self.type = 'FILES'
+                            pass
+                    self.options.append("%s %s" % (word, subcommand))
                 else:
                     self.options.append(word)
             elif word != source:
-                self.linkage = 'INSTALL'
-                target, self.destination = resolve_destination(word, cwd, source)
+                target, self.destination = resolve_destination(word, self.cwd, source)
         return target
 
-    def parse_lrelease(self, words, target=''):
+    def parse_lrelease(self, words, source, target=''):
         for word in words:
             if word == '-qm':
                 self.linkage = 'LOCALE'
@@ -214,7 +257,7 @@ class CompileCommand(object):
                 self.options.append(word)
         return target, self.linkage, self.options
 
-    def parse_genmarshal(self, words, target=''):
+    def parse_glib_genmarshal(self, words, source, target=''):
         for word in words:
             if word == '--output':
                 self.linkage = 'SOURCE'
@@ -223,7 +266,7 @@ class CompileCommand(object):
                 self.options.append(word)
         return target
 
-    def parse_dbus_binding_tool(self, words, target=''):
+    def parse_dbus_binding_tool(self, words, source, target=''):
         for word in words:
             if word.startswith('--output='):
                 self.linkage = 'SOURCE'
@@ -232,7 +275,7 @@ class CompileCommand(object):
                 self.options.append(word)
         return target
 
-    def parse_ar(self, words, target=''):
+    def parse_ar(self, words, source, target=''):
         for word in words:
             if target:
                 return target
@@ -281,3 +324,12 @@ class CompileCommand(object):
         if word:
             self.link_options.append(word)
         return target
+
+    def update_object_command(self, source, target, root_dir):
+        missing_depends = find_dependencies(source, self, root_dir)
+        if missing_depends:
+            info("cmd #%s created OBJECT %-25s depends on missing %s"
+                 % (self.id, relpath(target, root_dir),
+                    ' '.join([relpath(f, root_dir) for f in missing_depends])))
+            self.missing_depends.update(missing_depends)
+            self.include_binary_dir = True

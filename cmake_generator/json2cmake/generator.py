@@ -3,6 +3,7 @@ import re
 import logging
 from io import StringIO
 from .utils import *
+from .migration import get_common_values
 from .target import *
 
 logger, info, debug, warn, error = get_loggers(__name__)
@@ -12,7 +13,7 @@ class CmakeGenerator(PathUtils):
     used_names = {"": ""}
 
     def __init__(self, converter, name, cwd, single_file=False):
-        super(self.__class__, self).__init__(cwd)
+        PathUtils.__init__(self, cwd, converter.root_dir)
         self.db = converter.db
         self.name = name
         self.output = self.stream = StringIO() # open(os.path.join(cwd, 'CMakeLists.txt'), 'w')
@@ -22,6 +23,9 @@ class CmakeGenerator(PathUtils):
         self.other_installs = []
         self.common_configs = {}
         self.install_prefix = '/'
+
+    def relpath(self, path, root=None):
+        return relpath(path, self.directory, root if root else self.root_dir)
 
     def command_linkage(self, cmd_id):
         return self.db.command_linkage(cmd_id)
@@ -37,9 +41,12 @@ class CmakeGenerator(PathUtils):
         self.output = open(os.path.join(self.directory, 'CMakeLists.txt'), 'w')
         self.write_project_header()
         self.output.write(self.stream.getvalue())
+        cpp_targets = tuple(filter(lambda t: isinstance(t, CppTarget), self.targets))
         for arg_name in ('options', 'link_options', 'definitions',
                          'includes', 'system_includes', 'iquote_includes'):
-            values = self.simplify_command_common_args(arg_name)
+            arg_values = [getattr(t.command, arg_name) for t in cpp_targets]
+            values = get_common_values(arg_name, arg_values)
+            self.common_configs[arg_name] = values
             self.output_project_common_args(arg_name, values)
         self.write_targets()
 
@@ -68,22 +75,6 @@ class CmakeGenerator(PathUtils):
             if not merged:
                 merged_targets.append(target)
         return merged_targets
-
-    def simplify_command_common_args(self, arg_name):
-        common_values = None
-        for values in [getattr(target.command, arg_name) for target in self.targets.values()]:
-            if values:
-                if common_values is None:
-                    common_values = list(values)
-                    continue
-                for v in common_values:
-                    if v not in values:
-                        common_values.remove(v)
-        if common_values is None: common_values = []
-#       if common_values and arg_name.endswith('includes'):
-#           print('simplify_command_common_args', arg_name, 'for', self.directory, common_values)
-        self.common_configs[arg_name] = common_values
-        return common_values
 
     def output_project_common_args(self, arg_name, values):
         if not values:

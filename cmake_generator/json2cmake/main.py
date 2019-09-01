@@ -83,7 +83,11 @@ which may be difficult to get automatically captured using a ld logger.
     if args.name is None:
         args.name = get_default_name(args.infile)
 
-    db = CompilationDatabase(args.infile)
+    if os.path.isfile(infile.name):
+        filename = infile.name
+    else:
+        filename = os.path.join(os.getcwd(), 'compile_commands.json')
+    db = CompilationDatabase(args.infile, filename)
     db.read()
     if os.path.isfile(args.extra_infile):
         db.read(open(args.extra_infile, 'r'))

@@ -17,14 +17,11 @@ class CmakeConverter(PathUtils):
     generators = {}
 
     def __init__(self, database, name, cwd, single_file=False):
-        super(self.__class__, self).__init__(cwd)
+        PathUtils.__init__(self, cwd, database.root_dir)
         self.db = database
         self.name = name
         self.single_file = single_file
         self.common_configs = {}
-
-    def root_dir(self):
-        return self.db.directory
 
     def convert(self):
         for target, command_source in self.db.linkings.items():
@@ -182,7 +179,7 @@ class CmakeConverter(PathUtils):
     def write_install_target(self, cmd_id, files):
         command = self.db.install_command[cmd_id]
         generator = self.get_cmake_generator(command.cwd)
-        name = name_by_common_prefix(list(files), self.root_dir())
+        name = name_by_common_prefix(list(files), self.root_dir)
         info("Target %s installed by cmd #%s to %s" % (name, cmd_id, ' '.join([self.relpath(f) for f in files])))
         install_groups = group_keys_by_vv(files, self.db.objects)
         for cmd_id, file_set in install_groups.items():
@@ -190,7 +187,7 @@ class CmakeConverter(PathUtils):
             generator.output_cmake_install(name, command, file_set, linkage)
 
     def get_root_generator(self):
-        return self.get_cmake_generator(self.root_dir())
+        return self.get_cmake_generator(self.root_dir)
 
     def get_cmd_generator(self, cmd_id):
         return self.get_cmake_generator(self.db.command_cwd(cmd_id))

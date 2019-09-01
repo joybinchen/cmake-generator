@@ -1,8 +1,8 @@
 import os
 from io import StringIO
 import unittest
-from .utils import *
-from ..target import *
+from cmake_generator.json2cmake.tests.utils import *
+from cmake_generator.json2cmake.target import *
 
 
 class TestCmakeTarget(unittest.TestCase):
@@ -221,6 +221,27 @@ add_custom_command(OUTPUT device-dbus-glue.h
 )
 '''
         self.assertEqual(self.output.getvalue(), output_text)
+
+    def test_moc_command(self):
+        output_text = ''
+        self.assertEqual(self.output.getvalue(), output_text)
+        command = create_command('moc', linkage='SOURCE',
+                                 cwd='/git/goldendict',
+                                 definitions=['HAVE_X11', 'PROGRAM_VERSION="1.5.0-RC2+git"'],
+                                 includes=['/git/goldendict/build/moc_predefs.h', '/usr/include'])
+        target = CustomCommandTarget(command, 'build/moc_mainwindow.cpp', ['main_window.hh'])
+        generator = MockCmakeGenerator(self.output, '/git/goldendict')
+        target.bind(generator)
+        target.output_target()
+        output_text += '''
+add_custom_command(OUTPUT build/moc_mainwindow.cpp
+\tCOMMAND moc --include ${CMAKE_CURRENT_SOURCE_DIR}/build/moc_predefs.h -I/usr/include -DHAVE_X11 -DPROGRAM_VERSION="1.5.0-RC2+git"
+\tmain_window.hh
+\t-o ${CMAKE_CURRENT_BINARY_DIR}/build/moc_mainwindow.cpp
+)
+'''
+        self.assertEqual(self.output.getvalue(), output_text)
+
 
 
 class TestWrappedTarget(unittest.TestCase):

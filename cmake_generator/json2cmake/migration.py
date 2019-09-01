@@ -5,7 +5,9 @@ from diff_match_patch.diff_match_patch import diff_match_patch
 from .utils import get_loggers, freeze, DISALLOWED_CHARACTERS
 
 __all__ = ['get_diff_pattern', 'migrate_command', 'migrate_install_commands',
-           'get_matched_parts', 'name_by_common_prefix', 'group_keys_by_vv']
+           'get_matched_parts', 'name_by_common_prefix',
+           'group_keys_by_vv', 'get_common_values',
+           ]
 logger, info, debug, warn, error = get_loggers(__name__)
 diff = diff_match_patch().diff_main
 
@@ -176,11 +178,11 @@ def migrate_install_commands(migratables, install_command, diff_keys=()):
     for cmd_id, target, file_ in migratables:
         command = install_command[cmd_id].copy()
         for key in diff_keys: setattr(command, key, None)
-        freezed_command = freeze(command)
-        new_cmd_id = migrated_commands.get(freezed_command)
+        frozen_command = freeze(command)
+        new_cmd_id = migrated_commands.get(frozen_command)
         if new_cmd_id is None:
             new_cmd_id = cmd_id
-            migrated_commands[freezed_command] = new_cmd_id
+            migrated_commands[frozen_command] = new_cmd_id
             install_command[new_cmd_id] = command
             command.id = new_cmd_id
         dest_groups = groups.setdefault(new_cmd_id, {})
@@ -203,3 +205,17 @@ def group_keys_by_vv(files, objects):
         vv = next(iter(vk2vv.values()))
         groups.setdefault(vv, set()).add(key)
     return groups
+
+
+def get_common_values(arg_values):
+    common_values = None
+    for values in arg_values:
+        if values:
+            if common_values is None:
+                common_values = list(values)
+                continue
+            for v in common_values:
+                if v not in values:
+                    common_values.remove(v)
+    if common_values is None: common_values = []
+    return common_values

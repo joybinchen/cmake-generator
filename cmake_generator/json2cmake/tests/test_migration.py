@@ -1,8 +1,8 @@
 import os
 from io import StringIO
 import unittest
-from .utils import *
-from ..migration import *
+from cmake_generator.json2cmake.tests.utils import *
+from cmake_generator.json2cmake.migration import *
 
 
 class TestMigration(unittest.TestCase):
@@ -89,3 +89,8 @@ class TestMigration(unittest.TestCase):
             install_commands.append(cmd)
         migratables = [(k, list(v.keys())[0], list(v.values())[0]) for k, v in install.items()]
         return migratables, install_commands
+
+
+if __name__ == '__main__':
+    unittest.main()
+
