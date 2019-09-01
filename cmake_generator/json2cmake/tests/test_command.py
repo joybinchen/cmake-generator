@@ -1,9 +1,9 @@
 import os
 from io import StringIO
 import unittest
-from cmake_generator.json2cmake.tests.utils import *
-from cmake_generator.json2cmake.utils import freeze, resolve, resolve_paths, relpath
-from cmake_generator.json2cmake.command import *
+from .utils import *
+from ..utils import freeze, resolve, resolve_paths, relpath
+from ..command import *
 
 command_line_cxx = [
     "/usr/bin/ccache",

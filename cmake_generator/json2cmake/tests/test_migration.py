@@ -1,8 +1,8 @@
 import os
 from io import StringIO
 import unittest
-from cmake_generator.json2cmake.tests.utils import *
-from cmake_generator.json2cmake.migration import *
+from .utils import *
+from ..migration import *
 
 
 class TestMigration(unittest.TestCase):
@@ -12,7 +12,6 @@ class TestMigration(unittest.TestCase):
         self.maxDiff = 1024
 
     def test_get_matched_parts(self):
-        """test class CmakeTarget"""
         file_pattern ='/git/Tools/GNU-DevTools/gdb/%(0)s'
         files = [
             '/git/Tools/GNU-DevTools/gdb/gdb',

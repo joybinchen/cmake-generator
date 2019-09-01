@@ -1,8 +1,8 @@
 import os
 from io import StringIO
 import unittest
-from cmake_generator.json2cmake.tests.utils import *
-from cmake_generator.json2cmake.target import *
+from .utils import *
+from ..target import *
 
 
 class TestCmakeTarget(unittest.TestCase):
