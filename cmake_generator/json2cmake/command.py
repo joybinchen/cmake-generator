@@ -91,7 +91,7 @@ class Command(object):
 
         parser_function = getattr(self, 'parse_' + self.compiler.replace('-', '_'), None)
         if self.compiler.endswith("ar"):
-            target = self.parse_ar(words)
+            target = self.parse_ar(words, source)
         elif parser_function:
             target = parser_function(words, source)
         else:

@@ -83,8 +83,8 @@ which may be difficult to get automatically captured using a ld logger.
     if args.name is None:
         args.name = get_default_name(args.infile)
 
-    if os.path.isfile(infile.name):
-        filename = infile.name
+    if os.path.isfile(args.infile.name):
+        filename = args.infile.name
     else:
         filename = os.path.join(os.getcwd(), 'compile_commands.json')
     db = CompilationDatabase(args.infile, filename)

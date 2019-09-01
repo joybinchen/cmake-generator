@@ -57,7 +57,7 @@ def cmake_resolve_binary(path, base):
 class PathUtils(object):
     def __init__(self, directory, root_dir):
         self.directory = str(directory).rstrip('/')
-        self.root_dir = self.str(root_dir).rstrip('/')
+        self.root_dir = str(root_dir).rstrip('/')
 
     def set_directory(self, directory):
         self.directory = str(directory).rstrip('/')

@@ -44,6 +44,7 @@ class CmakeConverter(PathUtils):
         cmake_install_prefix = os.path.commonpath(external_destinations)
         for generator in CmakeConverter.generators.values():
             generator.set_install_prefix(cmake_install_prefix)
+            generator.setup_output()
             generator.write_to_file()
 
     def write_linked_target(self, target, command_source):
@@ -59,7 +60,7 @@ class CmakeConverter(PathUtils):
             info("Process %s target %s" % (linkage, self.relpath(target)))
             generator = self.get_cmake_generator(directory)
             if linkage == 'SOURCE':
-                generator.output_custom_command(target, cmd_id, files)
+                generator.output_custom_command(target, self.db.command[cmd_id], files)
                 continue
 
             output_name = generator.name_for_lib(target)

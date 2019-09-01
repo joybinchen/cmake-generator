@@ -27,9 +27,6 @@ class CmakeGenerator(PathUtils):
     def relpath(self, path, root=None):
         return relpath(path, self.directory, root if root else self.root_dir)
 
-    def command_linkage(self, cmd_id):
-        return self.db.command_linkage(cmd_id)
-
     def write(self, *args, **kwargs):
         self.output.write(*args, **kwargs)
         if logger.level >= logging.DEBUG: self.output.flush()
@@ -37,21 +34,49 @@ class CmakeGenerator(PathUtils):
     def set_install_prefix(self, prefix):
         self.install_prefix = prefix
 
+    def setup_output(self, output=None):
+        if output is None:
+            self.output = open(os.path.join(self.directory, 'CMakeLists.txt'), 'w')
+        else:
+            self.output = output
+
     def write_to_file(self):
-        self.output = open(os.path.join(self.directory, 'CMakeLists.txt'), 'w')
         self.write_project_header()
         self.output.write(self.stream.getvalue())
-        cpp_targets = tuple(filter(lambda t: isinstance(t, CppTarget), self.targets))
-        for arg_name in ('options', 'link_options', 'definitions',
-                         'includes', 'system_includes', 'iquote_includes'):
-            arg_values = [getattr(t.command, arg_name) for t in cpp_targets]
-            values = get_common_values(arg_name, arg_values)
-            self.common_configs[arg_name] = values
-            self.output_project_common_args(arg_name, values)
+        self.collect_common_configs()
+        self.write_common_configs()
         self.write_targets()
 
+    def collect_common_configs(self):
+        args_with_common = ('options', 'link_options', 'definitions',
+                            'includes', 'system_includes', 'iquote_includes')
+        cpp_targets = set(filter(lambda t: isinstance(t, CppTarget), self.targets.values()))
+        for arg_name in args_with_common:
+            arg_values = [getattr(t.command, arg_name) for t in cpp_targets]
+            self.common_configs[arg_name] = get_common_values(arg_values)
+        return args_with_common
+
+    def write_common_configs(self):
+        args_with_common = ('options', 'link_options', 'definitions',
+                            'includes', 'system_includes', 'iquote_includes')
+        for arg_name in args_with_common:
+            self.output_project_common_args(arg_name, self.common_configs[arg_name])
+
     def write_targets(self):
-        for target in set(self.targets.values()):
+        targets = []
+        for _, target in sorted(self.targets.items()):
+            for t in targets:
+                if t.name() == target.name():
+                    target = None
+                    break
+                if target.target in t.depends:
+                    targets.insert(targets.index(t), target)
+                    target = None
+                    break
+            if target is not None:
+                targets.append(target)
+
+        for target in targets:
             target.bind(self)
             target.output_target()
         for target in self.merged_wrapped_targets(self.other_installs):
@@ -110,8 +135,8 @@ class CmakeGenerator(PathUtils):
         return "${CMAKE_CURRENT_SOURCE_DIR}/%s" % self.relpath(path)
 
     def get_include_path(self, include_path):
-        if include_path.startswith(self.db.directory + '/') \
-                or include_path == self.db.directory:
+        if include_path.startswith(self.root_dir + '/') \
+                or include_path == self.root_dir:
             return os.path.relpath(include_path, self.directory)
         return include_path
 
@@ -124,8 +149,7 @@ class CmakeGenerator(PathUtils):
         return name, output_name
 
     def use_target_name(self, name, path):
-        if path is None:
-            path = self.resolve(name, self.directory)
+        path = resolve(path if path else name, self.directory)
         used_name = self.used_names.get(path)
         if used_name:
             return used_name
@@ -145,7 +169,7 @@ class CmakeGenerator(PathUtils):
 
     def output_subdirectory(self, directory):
         info("Project in %s add subdirectory %s"
-             % (self.db.relpath(self.directory), self.db.relpath(directory)))
+             % (relpath(self.directory, self.root_dir), relpath(directory, self.directory)))
         self.write("add_subdirectory(%s)\n" % self.relpath(directory))
 
     def output_linked_target(self, command, files, target, libtype, name, depends):
@@ -173,7 +197,7 @@ class CmakeGenerator(PathUtils):
     def write_command(self, command, options, name, parts, single_line=None):
         if single_line is None:
             single_line = len(' '.join(parts)) < 40
-        delimiter = ' ' if single_line else '\n    '
+        delimiter = ' ' if single_line else '\n\t'
         tail = '' if single_line else '\n'
         if not single_line and len(' '.join(parts)) / len(parts) < 7:
             lines = []
@@ -196,21 +220,11 @@ class CmakeGenerator(PathUtils):
         if not parts: return
         self.write_command('target_compile_' + arg_type, 'PRIVATE', name, parts)
 
-    def output_custom_command(self, target, cmd_id, sources):
-        config = self.db.command[cmd_id]
+    def output_custom_command(self, target, command, sources):
         name, output_name = self.name_as_target(target)
-        self.targets[target] = CustomCommandTarget(config, target, sources)
+        self.targets[target] = CustomCommandTarget(command, target, sources)
         if name != output_name:
             self.targets[target].set_name(name)
-        return
-        info("cmd #%s output custom target %s generated from %s"
-             % (cmd_id, self.relpath(target), self.joined_relpath(sources)))
-        compiler = config.compiler
-        options = config.options
-        self.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s\n\t%s\n\t%s\n\t%s\n)\n"
-                          % (self.relpath(target), compiler, ' '.join(options),
-                             self.cmake_resolve_source('${X}'),
-                             self.custom_target_output_args(compiler, target)))
 
     def output_locales(self, cmd_id, command, dest_pattern, src_pattern, paths):
         if src_pattern:

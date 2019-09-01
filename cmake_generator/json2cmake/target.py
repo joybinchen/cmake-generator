@@ -83,6 +83,10 @@ class CmakeTarget(object):
         if sources:
             self.add_sources(sources)
 
+    def __repr__(self):
+        children = ', '.join('%s=%s' % it for it in sorted(filter(lambda it: it[1], self.__dict__.items())))
+        return "%s.%s{%s}" % (self.__class__.__name__, self.name(), children)
+
     def bind(self, generator):
         self.generator = generator
         self.common_configs = generator.common_configs
