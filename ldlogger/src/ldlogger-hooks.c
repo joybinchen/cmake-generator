@@ -70,7 +70,6 @@ static void tryLog(
   char* ldpreload;
 
 #define debug if(loggerDebug) fprintf
-  fopen()
   char const* loggerDebug;
   loggerDebug = getenv("CC_LOGGER_DEBUG");
   debug(stderr, "tryLog %s", filename_);
