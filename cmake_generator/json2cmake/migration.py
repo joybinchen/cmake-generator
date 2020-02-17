@@ -25,7 +25,7 @@ def update_diff_pattern(pattern, fields, lhs, rhs):
         fields.append((lhs, rhs))
 
 
-def get_diff_pattern(text1, text2, extend=True):
+def get_diff_pattern(text1, text2, strict=False, extend=True):
     diff_result = diff(text1, text2, False)
     pattern = []
     lhs = rhs = ''
@@ -46,11 +46,11 @@ def get_diff_pattern(text1, text2, extend=True):
         update_diff_pattern(pattern, fields, lhs, rhs)
     # debug('Diff result %s for %s %s: %s' % (pattern, text1, text2, fields))
     if extend:
-        extend_diff_pattern(pattern, fields)
+        extend_diff_pattern(pattern, fields, strict)
     return ''.join(pattern), fields
 
 
-def extend_diff_pattern(pattern, fields):
+def extend_diff_pattern(pattern, fields, strict=False):
     delimiter = re.compile('[-.~_/]')
     matcher = re.compile(r'%\(([0-9])\)s')
     i = 0
@@ -58,7 +58,11 @@ def extend_diff_pattern(pattern, fields):
         part = pattern[i]
         matched = matcher.match(part)
         if not matched:
-            i += 1
+            if strict and len(fields) == 1 and i == len(pattern) - 1 and not pattern[-1].startswith('/'):
+                extension = pattern.pop()
+                fields[0] = tuple(f + extension for f in fields[fid])
+            else:
+                i += 1
             continue
         fid = int(matched.group(1))
         if i > 0:
@@ -66,8 +70,8 @@ def extend_diff_pattern(pattern, fields):
             prev_parts = delimiter.split(prev)
             if len(prev_parts) > 1:
                 extension = prev_parts[-1]
-                pos = - len(extension)
-                pattern[i-1] = prev[:pos]
+                pos = -len(extension)
+                if pos != 0: pattern[i-1] = prev[:pos]
                 fields[fid] = tuple(extension + f for f in fields[fid])
         i += 1
         if i < len(pattern):
@@ -81,7 +85,7 @@ def extend_diff_pattern(pattern, fields):
     return pattern, fields
 
 
-def migrate_command(target, source, groups, max_group=1):
+def migrate_command(target, source, groups, strict=False, max_group=1):
     if not groups:
         info('Initialize empty group with source & target\n\t%s => %s'
              % (target, source))
@@ -105,9 +109,9 @@ def migrate_command(target, source, groups, max_group=1):
 
     for (dest, src_pattern), target_files in groups.items():
         prev_pattern = src_pattern or target_files[0][1]
-        file_pattern, file_fields = get_diff_pattern(prev_pattern, source)
+        file_pattern, file_fields = get_diff_pattern(prev_pattern, source, strict)
         if not file_fields or len(file_fields) > max_group: continue
-        dest_pattern, dest_fields = get_diff_pattern(dest, target)
+        dest_pattern, dest_fields = get_diff_pattern(dest, target, strict)
         if not dest_pattern: continue
         debug('\n\t'.join([
             'Found pattern %s with fields %s for' % (dest_pattern, dest_fields),

@@ -3,7 +3,7 @@ import re
 import logging
 from io import StringIO
 from .utils import *
-from .migration import get_common_values
+from .migration import get_common_values, migrate_command
 from .target import *
 
 logger, info, debug, warn, error = get_loggers(__name__)
@@ -76,12 +76,45 @@ class CmakeGenerator(PathUtils):
             if target is not None:
                 targets.append(target)
 
+        merged_command = {}
+        target_group_by_cmd = {}
+        targets_with_depends = []
         for target in targets:
+            if target.depends:
+                targets_with_depends.append(target)
+            else:
+                merged_command.setdefault(target.command.id, target.command)
+                target_group_by_cmd.setdefault(target.command.id, []).append(target)
+        for cmd_id, command in merged_command.items():
+            target_group = target_group_by_cmd[cmd_id]
+            if len(target_group) == 1:
+                merged_targets = target_group
+            else:
+                merged_targets = self.merge_targets(cmd_id, command, target_group)
+            for target in merged_targets:
+                target.bind(self)
+                target.output_target()
+        for target in targets_with_depends:
             target.bind(self)
             target.output_target()
         for target in self.merged_wrapped_targets(self.other_installs):
             target.bind(self)
             target.output_target()
+
+    def merge_targets(self, cmd_id, command, targets):
+        groups = {}
+        for target in targets:
+            for source in target.sources:
+                migrate_command(target.target, source, groups)
+        wrappers = []
+        for (dest_pattern, src_pattern), target_sources in groups.items():
+            info("cmd #%s output custom built source\n\t%s"
+                 % (cmd_id, '\n\t'.join(
+                ['%s <- %s' % (self.relpath(t), self.relpath(s)) for t, s in target_sources])))
+            wrapper = self.migrate_custom_targets(cmd_id, command, dest_pattern,
+                                                  src_pattern, target_sources, "Sources")
+            wrappers.append(wrapper)
+        return wrappers
 
     @staticmethod
     def merged_wrapped_targets(targets):
@@ -226,7 +259,7 @@ class CmakeGenerator(PathUtils):
         if name != output_name:
             self.targets[target].set_name(name)
 
-    def output_locales(self, cmd_id, command, dest_pattern, src_pattern, paths):
+    def migrate_custom_targets(self, cmd_id, command, dest_pattern, src_pattern, paths, kind="Locales"):
         fields = []
         if src_pattern:
             matcher = re.compile(src_pattern % {'0': '(.*)'})
@@ -237,21 +270,13 @@ class CmakeGenerator(PathUtils):
             #fields = [matcher.match(x[0]).groups()[0] for x in paths]
         else:
             fields.append("''")
-        info("Locales created by cmd #%s to %s" % (cmd_id, ' '.join(fields)))
+        info("%s created by cmd #%s to %s" % (kind, cmd_id, ' '.join(fields)))
         dest = dest_pattern % {'0': '${X}'}
         source = src_pattern % {'0': '${X}'}
         custom_command = CustomCommandTarget(command, dest, [source, ])
         wrapper = ForeachTargetWrapper(command, 'X', fields)
         wrapper.append_child(custom_command)
-        self.other_installs.append(wrapper)
-        return
-        compiler = command.compiler
-        output_args = self.custom_target_output_args(compiler, dest_pattern % {'0': '${X}'})
-        self.write_command('foreach', '', 'X', fields)
-        self.write("add_custom_command(OUTPUT %s\n\tCOMMAND %s %s\n\t%s\n\t%s\n)\n"
-                   % (self.relpath(dest), compiler, ' '.join(command.options),
-                      self.cmake_resolve_source(source), output_args))
-        self.write('endforeach(X)\n\n')
+        return wrapper
 
     def output_migrated_install(self, command, dest_pattern, file_pattern, matched, var='X'):
         child_target = InstallTarget(command, dest_pattern, [file_pattern, ])

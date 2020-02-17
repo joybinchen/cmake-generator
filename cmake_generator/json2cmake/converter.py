@@ -232,7 +232,8 @@ class CmakeConverter(PathUtils):
             info("cmd #%s output locale target\n\t%s"
                  % (cmd_id, '\n\t'.join(
                     ['%s <- %s' % (self.relpath(t), self.relpath(s)) for t, s in target_sources])))
-            generator.output_locales(cmd_id, command, dest_pattern, src_pattern, target_sources)
+            wrapper = generator.migrate_custom_targets(cmd_id, command, dest_pattern, src_pattern, target_sources)
+            generator.other_installs.append(wrapper)
 
     def output_library(self, cmd_id, command, files, linkage):
         generator = self.get_cmake_generator(command.cwd)
