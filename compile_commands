@@ -1,0 +1,37 @@
+#! /bin/bash
+CC_LOGGER_SCRIPT=$(realpath $0)
+CC_LOGGER_DIR=$(dirname ${CC_LOGGER_SCRIPT})
+COMPILE_DB=compile_commands.json
+if [[ -e ${COMPILE_DB} ]]; then
+    BACKUP_TAG=$(stat --printf=%y ${COMPILE_DB} |sed 's| |_|' | cut -d'.' -f1)
+	mv ${COMPILE_DB} ${COMPILE_DB}.${BACKUP_TAG}.json
+fi
+#echo CodeChecker log -k -o compile_commands.json -b "/usr/bin/make -j1 $@"
+make_command="/usr/bin/make -j1 $@"
+#CodeChecker log -k -o compile_commands.json -b "$make_command"
+#exit $?
+export LD_PRELOAD=ldlogger.so
+export LD_LIBRARY_PATH="${CC_LOGGER_DIR}/ldlogger/build/lib/$(uname -m):${LD_LIBRARY_PATH}"
+echo LD_LIBRARY_PATH == ${LD_LIBRARY_PATH}
+export CC_LOGGER_FILE="${PWD}/compile_commands.json"
+export CC_LOGGER_KEEP_LINK=true
+export CC_LOGGER_GCC_LIKE="gcc:g++:clang:ar:python"
+export CC_LOGGER_JAVA_LIKE="javac"
+export CC_LOGGER_CUSTOM_LIKE="moc:uic:qmake:lrelease:install:msgfmt:dbus-binding-tool:glib-genmarshal"
+export CC_LOGGER_OUTPUT_ARG_uic='-o'
+export CC_LOGGER_OUTPUT_ARG_moc='-o'
+export CC_LOGGER_OPTION_ARG_moc='--include'
+export CC_LOGGER_OUTPUT_ARG_qmake='$-1'
+export CC_LOGGER_OPTION_ARG_qmake='-install'
+export CC_LOGGER_OUTPUT_ARG_lrelease='-qm'
+export CC_LOGGER_OUTPUT_ARG_install='$-1'
+export CC_LOGGER_OPTION_ARG_install='-m'
+export CC_LOGGER_OUTPUT_ARG_msgfmt='-o:--output-file'
+export CC_LOGGER_OUTPUT_ARG_dbus_binding_tool='--output'
+export CC_LOGGER_OUTPUT_ARG_glib_genmarshal='--output'
+if [ x"$MAKE_COMMAND" != x ]; then
+	make_command="echo '$MAKE_COMMAND' | bash"
+fi
+echo $make_command
+CodeChecker log -k -o compile_commands.json -b "$make_command"
+#$@
