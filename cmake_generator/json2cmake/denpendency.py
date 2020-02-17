@@ -19,7 +19,7 @@ def find_dependencies(file_, command, root_dir):
         output = open(depend_file).read().strip()
     else:
         output = extract_dependencies(command, file_, cwd)
-        open(depend_file, 'wb').write(output)
+        open(depend_file, 'w').write(output)
     if not output:
         return []
 

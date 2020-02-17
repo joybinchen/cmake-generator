@@ -16,7 +16,6 @@ class CompilationDatabase(PathUtils):
         filename = resolve(filename, os.getcwd())
         directory = os.path.dirname(filename)
         PathUtils.__init__(self, directory, directory)
-        self.cmake_filename = filename
         # targets: {cmd_id: {target: {source, ...}, ...}, ...}
         self.targets = {}
         # sources: {source: {target: cmd_id, ...}, ...}
@@ -48,7 +47,7 @@ class CompilationDatabase(PathUtils):
 
     def is_generated(self, source):
         if source in self.linkings:
-            command_sources = self.db.linkings[source]
+            command_sources = self.linkings[source]
             for cid in command_sources.keys():
                 if self.command_linkage(cid) == 'SOURCE':
                     return True
@@ -60,6 +59,7 @@ class CompilationDatabase(PathUtils):
         cmd_dict = {}
         install_cmd_dict = {}
         for entry in database:
+            if not entry: continue
             source, arguments, cwd = CompilationDatabase.read_entry(entry, self.directory)
             cmd, target = Command.parse(arguments, source, cwd, self.directory)
             if cmd:
@@ -72,7 +72,8 @@ class CompilationDatabase(PathUtils):
     @staticmethod
     def read_entry(entry, directory):
         cwd = entry.get('directory', directory)
-        file_ = resolve(entry['file'], cwd)
+        file_ = entry.get('file', '')
+        if file_: file_ = resolve(file_, cwd)
         arguments = shlex.split(entry.get('command', ''))
         arguments = entry.get('arguments', arguments)
         return file_, arguments, cwd

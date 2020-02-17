@@ -40,9 +40,12 @@ class CmakeConverter(PathUtils):
         for d in self.db.installs.values():
             for dest in d.keys():
                 destinations.add(dest)
-        external_destinations = tuple(filter(lambda d: not d.startswith(self.directory), destinations))
-        cmake_install_prefix = os.path.commonpath(external_destinations)
-        for generator in CmakeConverter.generators.values():
+        # if not destinations: return
+
+        external_dests = tuple(filter(lambda d: not d.startswith(self.directory), destinations))
+        cmake_install_prefix = os.path.commonpath(external_dests) if external_dests else "/usr/local"
+        generators = CmakeConverter.generators.values()
+        for generator in generators:
             generator.set_install_prefix(cmake_install_prefix)
             generator.setup_output()
             generator.write_to_file()
@@ -52,42 +55,47 @@ class CmakeConverter(PathUtils):
         if len(commands) > 1:
             warn("target %s created by multiple command:\n%s" % (target, commands))
         for cmd_id, files in command_source.items():
-            files = sorted(files)
             command = self.db.command[cmd_id]
-            files.extend(command.missing_depends)
-            directory = command.cwd
-            linkage = command.linkage
-            info("Process %s target %s" % (linkage, self.relpath(target)))
-            generator = self.get_cmake_generator(directory)
-            if linkage == 'SOURCE':
-                generator.output_custom_command(target, self.db.command[cmd_id], files)
-                continue
+            generator = self.get_cmake_generator(command.cwd)
+            CmakeConverter.write_command_for_linked_target(
+                command, target, files, generator, self.db, self.directory)
 
-            output_name = generator.name_for_lib(target)
-            debug("%s %s linked by cmd #%s from %s"
-                  % (linkage, self.relpath(target), cmd_id, self.joined_relpath(files)))
-            source_files, referenced_libs, compilations, depends = self.classify_source_files(files, target)
-            command = command.copy()
-            self.update_referenced_libs(command, referenced_libs)
-            self.migrate_sub_compilations(command, compilations, target, output_name)
-            generator.output_linked_target(command, source_files, target, linkage, output_name, depends)
+    @staticmethod
+    def write_command_for_linked_target(command, target, files, generator, db, directory):
+        files = sorted(files)
+        files.extend(command.missing_depends)
+        linkage = command.linkage
+        info("Process %s target %s" % (linkage, relpath(target, directory)))
+        if linkage == 'SOURCE':
+            return generator.output_custom_command(target, command, files)
+        output_name = generator.name_for_lib(target)
+        debug("%s %s linked by cmd #%s from %s"
+              % (linkage, relpath(target, directory), command.id,
+                 ' '.join([relpath(f, directory) for f in files])))
+        source_files, referenced_libs, compilations, depends = CmakeConverter.classify_source_files(
+            files, target, db, directory)
+        command = command.copy()
+        CmakeConverter.update_referenced_libs(command, referenced_libs)
+        CmakeConverter.migrate_sub_compilations(command, compilations, target, output_name, db)
+        generator.output_linked_target(command, source_files, target, linkage, output_name, depends)
 
-    def classify_source_files(self, files, target):
+    @staticmethod
+    def classify_source_files(files, target, db, directory):
         source_files = set()
         referenced_libs = {}
         compilations = {}
         dependencies = set()
         for f in files:
-            if f in self.db.linkings:
+            if f in db.linkings:
                 dependencies.add(f)
-                info('%s refer linked target %s' % (self.relpath(target), self.relpath(f)))
-                linkage = self.db.target_linkage(f)
+                info('%s refer linked target %s' % (relpath(target, directory), relpath(f, directory)))
+                linkage = db.target_linkage(f)
                 if linkage in ('STATIC', 'SHARED', 'SOURCE'):
                     referenced_libs[f] = linkage
                 else:
                     source_files.add(f)
                 continue
-            if f not in self.db.objects:
+            if f not in db.objects:
                 ext = os.path.splitext(f)[1]
                 if ext == '.a':
                     referenced_libs[f] = 'STATIC'
@@ -96,11 +104,11 @@ class CmakeConverter(PathUtils):
                 else:
                     if ext not in ('.c', '.cpp', '.cc', '.java', '.qm', '.qch', '.ts', '.po'):
                         info('%s referenced %s not in linked objects as bellow\n\t%s'
-                             % (self.relpath(target), f, '\n\t'.join(self.db.linkings.keys())))
+                             % (relpath(target, directory), f, '\n\t'.join(db.linkings.keys())))
                     source_files.add(f)
                 continue
-            for source, cmd_id in self.db.objects[f].items():
-                if self.db.command_linkage(cmd_id) != 'INSTALL':
+            for source, cmd_id in db.objects[f].items():
+                if db.command_linkage(cmd_id) != 'INSTALL':
                     compilations.setdefault(cmd_id, {})[source] = f
                 source_files.add(source)
         return source_files, referenced_libs, compilations, dependencies
@@ -113,28 +121,29 @@ class CmakeConverter(PathUtils):
                 config.include_binary_dir = True
                 break
 
-    def migrate_sub_compilations(self, config, compilations, target, name):
+    @staticmethod
+    def migrate_sub_compilations(config, compilations, target, name, db):
         if len(compilations) > 1:
             warn("Target %s is created by multiple commands: %s"
-                 % (self.db.relpath(target), ' '.join(["#%s" % cmd for cmd in compilations])))
+                 % (db.relpath(target), ' '.join(["#%s" % cmd for cmd in compilations])))
         for cmd_id in compilations.keys():
-            config.migrate(self.db.command[cmd_id])
+            config.migrate(db.command[cmd_id])
         for cmd_id, source_product in compilations.items():
             for source, product in source_product.items():
-                if self.reduce_target(cmd_id, product, source):
-                    debug("Target %s use source %-20s instead of %s"
-                          % (name, self.relpath(source), self.relpath(product)))
-                if self.db.is_generated(source):
+                if CmakeConverter.reduce_target(cmd_id, product, source, db.targets):
+                    debug("Target %s use source %-20s instead of %s" % (name, source, product))
+                if db.is_generated(source):
                     config.include_binary_dir = True
 
-    def reduce_target(self, cmd_id, product, source):
-        target_sources = self.db.targets.get(cmd_id, {})
+    @staticmethod
+    def reduce_target(cmd_id, product, source, targets):
+        target_sources = targets.get(cmd_id, {})
         sources = target_sources.get(product, set())
         if source in sources:
             sources.remove(source)
             if not sources:
                 target_sources.pop(product)
-                debug("pop %s from targets of cmd #%s" % (self.relpath(product), cmd_id))
+                debug("cmd #%s pop its targets %s" % (cmd_id, product))
             return True
         else:
             info("file %s not in source list of target %s\n\t%s\n%s %s" % (
@@ -200,10 +209,13 @@ class CmakeConverter(PathUtils):
             name = self.name
         else:
             name = "%s-%s" % (self.name, self.relpath(directory))
-        generators = self.__class__.generators
+        generators = CmakeConverter.generators
+        return self.cmake_generator(directory, name, generators)
+
+    def cmake_generator(self, directory, name, generators):
         generator = generators.get(name)
         if generator is None:
-            generator = CmakeGenerator(self, name, directory, self.single_file)
+            generator = CmakeGenerator(name, directory, self.directory, self.single_file)
             generators[name] = generator
             root_generator = self.get_root_generator()
             if root_generator != generator:

@@ -73,7 +73,7 @@ class Command(object):
     def parse(command_line, source, cwd, root_dir):
         if isinstance(command_line, basestring):
             command_line = shlex.split(command_line)
-        words = filter(lambda t: t, command_line)
+        words = iter(command_line)
         compiler = os.path.basename(next(words))  # remove the initial 'cc' / 'c++'
         if compiler.startswith('python'):
             compiler = os.path.basename(next(words))
@@ -255,7 +255,11 @@ class Command(object):
                 target = next(words)
             elif word.startswith('-'):
                 self.options.append(word)
-        return target, self.linkage, self.options
+            elif word == source:
+                pass
+            else:
+                pass
+        return target
 
     def parse_glib_genmarshal(self, words, source, target=''):
         for word in words:

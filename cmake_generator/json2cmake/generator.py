@@ -12,11 +12,11 @@ logger, info, debug, warn, error = get_loggers(__name__)
 class CmakeGenerator(PathUtils):
     used_names = {"": ""}
 
-    def __init__(self, converter, name, cwd, single_file=False):
-        PathUtils.__init__(self, cwd, converter.root_dir)
-        self.db = converter.db
+    def __init__(self, name, cwd, root_dir, single_file=False):
+        PathUtils.__init__(self, cwd, root_dir)
         self.name = name
-        self.output = self.stream = StringIO() # open(os.path.join(cwd, 'CMakeLists.txt'), 'w')
+        self.stream = StringIO()
+        self.output = open(os.path.join(cwd, 'CMakeLists.txt'), 'w')
         self.single_file = single_file
         # targets: {t.name: t, t.target: t, }
         self.targets = {}
@@ -227,11 +227,16 @@ class CmakeGenerator(PathUtils):
             self.targets[target].set_name(name)
 
     def output_locales(self, cmd_id, command, dest_pattern, src_pattern, paths):
+        fields = []
         if src_pattern:
             matcher = re.compile(src_pattern % {'0': '(.*)'})
-            fields = [matcher.match(x[0]).groups()[0] for x in paths]
+            for x in paths:
+                matched = matcher.match(x[1])
+                groups = matched.groups()
+                fields.append(groups[0])
+            #fields = [matcher.match(x[0]).groups()[0] for x in paths]
         else:
-            fields = ["''"]
+            fields.append("''")
         info("Locales created by cmd #%s to %s" % (cmd_id, ' '.join(fields)))
         dest = dest_pattern % {'0': '${X}'}
         source = src_pattern % {'0': '${X}'}

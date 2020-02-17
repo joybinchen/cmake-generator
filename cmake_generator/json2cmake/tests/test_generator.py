@@ -6,18 +6,10 @@ from ..utils import *
 from ..generator import *
 
 
-class MocConverter(PathUtils):
-    def __init__(self, directory):
-        PathUtils.__init__(self, directory, directory)
-        self.install_prefix = '/usr/local'
-        self.db = None
-
-
 class TestCmakeGenerator(unittest.TestCase):
     def setUp(self):
         self.maxDiff = 10240
         cwd = '/git/gdb/gdbserver'
-        self.convertor = MocConverter('/git/gdb')
         self.output = StringIO()
         self.cxx_command = create_command(
             'clang++', cwd=cwd, linkage='OBJECT',
@@ -31,7 +23,8 @@ class TestCmakeGenerator(unittest.TestCase):
     def test_executable(self):
         output_text = ''
         self.assertEqual(self.output.getvalue(), output_text)
-        generator = CmakeGenerator(self.convertor, '/git/gdb/gdbserver', '/git/gdb')
+        generator = CmakeGenerator('gdbserver', '/git/gdb/gdbserver', '/git/gdb')
+        generator.set_install_prefix('/usr/local')
         generator.output_linked_target(self.cxx_command, ['abc.c', 'def.cpp'],
                                        '/git/gdb/gdbserver/libdoit.a', 'STATIC', 'libdoit', [])
 #       generator.output_linked_target(self.cxx_command, ['abc.c', 'def.cpp'],
@@ -44,7 +37,7 @@ class TestCmakeGenerator(unittest.TestCase):
         generator.write_project_header()
         generator.output.write(generator.stream.getvalue())
         output_text += """cmake_minimum_required(VERSION 2.8.8)
-project(/git/gdb/gdbserver LANGUAGES C CXX)
+project(gdbserver LANGUAGES C CXX)
 
 """
         self.assertEqual(self.output.getvalue(), output_text)
@@ -65,12 +58,7 @@ add_compile_definitions(
 \tLOCALEDIR="/usr/local/share/locale"
 \tHAVE_CONFIG_H
 )
-include_directories( AFTER
-\tgdbserver
-\tgdbserver/config
-\t.
-\t/usr/include
-)
+include_directories( AFTER . config .. /usr/include)
 """
         self.assertEqual(self.output.getvalue(), output_text)
 
