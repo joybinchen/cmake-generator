@@ -173,6 +173,13 @@ class CmakeTarget(object):
         if isinstance(sources, basestring):
             sources = [sources, ]
         sources = [self.generator.relpath(s) for s in sources]
+        if len(sources) > 2:
+            if not self.name():
+                name, _ = self.generator.name_as_target(os.path.commonpath(sources))
+                self.set_name(name)
+            var_name = "%s_%s" % (self.name().upper(), install_type)
+            self.output.write_command('set', var_name, '', sources)
+            sources = ["${%s}" % var_name, ]
         self.output.write_command('install', '', install_type, sources, 'DESTINATION ' + destination)
 
     def cmake_resolve_source(self, path):
@@ -226,7 +233,7 @@ class CppTarget(CmakeTarget):
         return self.get_values('iquote_includes')
 
     def cmake_command(self):
-        return 'add_executable'
+        return 'add_library'
 
     def output_target_config(self, name):
         self.output_compile_args('options', name, self.get_options())
@@ -337,7 +344,7 @@ class CustomCommandTarget(CmakeTarget):
         command_line = 'COMMAND %s %s' % (self.compiler, ' '.join(self.get_options()))
         parts = []
         parts.append(command_line)
-        parts += [s % pattern_replace for s in self.get_sources()]
+        parts += [self.generator.relpath(s % pattern_replace) for s in self.get_sources()]
         output_args = self.custom_target_output_args()
         self.output.write_command('add_custom_command', '', target, parts, output_args)
         self.output.finish()
