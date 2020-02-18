@@ -171,7 +171,10 @@ def name_by_common_prefix(files, root_dir):
     name = os.path.basename(prefix.rstrip("-_."))
     name = re.sub(DISALLOWED_CHARACTERS, "", name)
     if not name:
-        name = os.path.relpath(prefix, root_dir).rstrip("-_.").replace('/', '_').replace('.', '_')
+        relpath = os.path.relpath(prefix, root_dir)
+        while relpath.startswith('../'):
+            relpath = relpath[3:]
+        name = relpath.rstrip("-_.").replace('/', '_').replace('.', '_')
         name = re.sub(DISALLOWED_CHARACTERS, "", name)
     return name
 
@@ -199,7 +202,7 @@ def group_keys_by_vv(files, objects):
     @objects: {key: {vk: vv, ...}, ...}
     returns {vv: {key1, key2, ...}, ...}"""
     groups = {}
-    for key in files:
+    for key in files.values():
         vk2vv = objects.get(key)
         if vk2vv is None:
             if not os.path.isfile(key):

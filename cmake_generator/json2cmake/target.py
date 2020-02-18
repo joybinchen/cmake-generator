@@ -121,6 +121,9 @@ class CmakeTarget(object):
     def add_sources(self, sources):
         self.sources.update(sources)
 
+    def real_sources(self):
+        return self.sources
+
     def get_sources(self):
         return sorted(self.sources)
 
@@ -377,6 +380,19 @@ class WrappedTarget(CmakeTarget):
 class ForeachTargetWrapper(WrappedTarget):
     def __init__(self, command, target, sources):
         super(ForeachTargetWrapper, self).__init__(command, target, sources)
+
+    def real_sources(self):
+        sources = []
+        for child in self.children:
+            for source in child.get_sources():
+                if source.find('${X}') >= 0:
+                    pattern = source.replace('${X}', '%(X)s')
+                    for part in self.sources:
+                        patched = pattern % {'X': part}
+                        sources.append(patched)
+                else:
+                    sources.append(source)
+        return sources
 
     def bind(self, generator):
         super(ForeachTargetWrapper, self).bind(generator)

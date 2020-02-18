@@ -11,8 +11,30 @@ class TestMigration(unittest.TestCase):
         self.generator = MockCmakeGenerator(self.output, os.getcwd())
         self.maxDiff = 1024
 
+    def test_name_by_common_prefix(self):
+        root_dir = '/git/NLP/Dictionary/Goldendict/goldendict.joybin_mod/Release'
+        paths = [
+            '/git/NLP/Dictionary/Goldendict/goldendict.joybin_mod/redist/goldendict.appdata.xml',
+            '/git/NLP/Dictionary/Goldendict/goldendict.joybin_mod/redist/icons/goldendict.png',
+        ]
+        common_path = name_by_common_prefix(paths, root_dir)
+        self.assertEqual(common_path, 'redist')
+        root_dir = '/git/Tools/GNU-DevTools/gdb/'
+        paths = [
+            '/git/Tools/GNU-DevTools/gdb/contrib/xdx',
+            '/git/Tools/GNU-DevTools/gdb/contrib/gdb-add-index.sh',
+        ]
+        common_path = name_by_common_prefix(paths, root_dir)
+        self.assertEqual(common_path, 'contrib')
+        paths = [
+            '/git/Tools/GNU-DevTools/gdb/contrib/gdx',
+            '/git/Tools/GNU-DevTools/gdb/contrib/gdb-add-index.sh',
+        ]
+        common_path = name_by_common_prefix(paths, root_dir)
+        self.assertEqual(common_path, 'gd')
+
     def test_get_matched_parts(self):
-        file_pattern ='/git/Tools/GNU-DevTools/gdb/%(0)s'
+        file_pattern = '/git/Tools/GNU-DevTools/gdb/%(0)s'
         files = [
             '/git/Tools/GNU-DevTools/gdb/gdb',
             '/git/Tools/GNU-DevTools/gdb/contrib/gdb-add-index.sh',

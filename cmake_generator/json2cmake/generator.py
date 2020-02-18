@@ -3,7 +3,7 @@ import re
 import logging
 from io import StringIO
 from .utils import *
-from .migration import get_common_values, migrate_command
+from .migration import get_common_values, migrate_command, name_by_common_prefix
 from .target import *
 
 logger, info, debug, warn, error = get_loggers(__name__)
@@ -14,9 +14,10 @@ class CmakeGenerator(PathUtils):
 
     def __init__(self, name, cwd, root_dir, single_file=False):
         PathUtils.__init__(self, cwd, root_dir)
+        self.generated = False
         self.name = name
         self.stream = StringIO()
-        self.output = open(os.path.join(cwd, 'CMakeLists.txt'), 'w')
+        self.output = None
         self.single_file = single_file
         # targets: {t.name: t, t.target: t, }
         self.targets = {}
@@ -28,19 +29,47 @@ class CmakeGenerator(PathUtils):
         return relpath(path, self.directory, root if root else self.root_dir)
 
     def write(self, *args, **kwargs):
-        self.output.write(*args, **kwargs)
+        if self.output is None:
+            self.stream.write(*args, **kwargs)
+        else:
+            self.output.write(*args, **kwargs)
         if logger.level >= logging.DEBUG: self.output.flush()
 
     def set_install_prefix(self, prefix):
         self.install_prefix = prefix
 
+    @staticmethod
+    def guess_source_dir(directory, targets):
+        group = {}
+        for generated_file, target in targets.items():
+            sources = target.real_sources()
+            if not sources:
+                sources = [generated_file, ]
+            for source in sources:
+                source_dir = os.path.dirname(source)
+                group.setdefault(source_dir, set()).add(source)
+        max_count = 0
+        for source_dir, sources in group.items():
+            count = len(sources)
+            if max_count < count:
+                directory = source_dir
+                max_count = count
+        return directory
+
     def setup_output(self, output=None):
+        if self.generated: return self.directory
+        directory = self.directory
         if output is None:
-            self.output = open(os.path.join(self.directory, 'CMakeLists.txt'), 'w')
+            directory = self.guess_source_dir(directory, self.targets)
+            self.directory = directory
+            self.output = open(os.path.join(directory, 'CMakeLists.txt'), 'w')
         else:
             self.output = output
+        return directory
 
     def write_to_file(self):
+        if self.generated: return
+        self.generated = True
         self.write_project_header()
         self.output.write(self.stream.getvalue())
         self.collect_common_configs()
@@ -97,7 +126,8 @@ class CmakeGenerator(PathUtils):
         for target in targets_with_depends:
             target.bind(self)
             target.output_target()
-        for target in self.merged_wrapped_targets(self.other_installs):
+        migrated_targets = self.migrate_targets(self.other_installs)
+        for target in migrated_targets:
             target.bind(self)
             target.output_target()
 
@@ -117,22 +147,22 @@ class CmakeGenerator(PathUtils):
         return wrappers
 
     @staticmethod
-    def merged_wrapped_targets(targets):
-        merged_targets = []
+    def migrate_targets(targets):
+        migrated = []
         for target in targets:
             if not isinstance(target, WrappedTarget):
-                merged_targets.append(target)
+                migrated.append(target)
                 continue
             merged = False
-            for other in merged_targets:
+            for other in migrated:
                 if type(other) == type(target) and other.sources == target.sources:
                     for child in target.children:
                         other.append_child(child)
                     merged = True
                     break
             if not merged:
-                merged_targets.append(target)
-        return merged_targets
+                migrated.append(target)
+        return migrated
 
     def output_project_common_args(self, arg_name, values):
         if not values:
@@ -287,7 +317,7 @@ class CmakeGenerator(PathUtils):
     def output_cmake_install(self, name, command, file_set, linkage):
         directories = []
         files = []
-        destination = command.destination if command.destination else command.target
+        destination = command.destination if command.destination else name if name else command.target
         for f in file_set:
             if f in self.targets:
                 self.targets[f].add_destination(destination)
@@ -296,10 +326,12 @@ class CmakeGenerator(PathUtils):
             else:
                 files.append(f)
         if directories:
-            self.other_installs.append(InstallTarget(command, name, directories, 'DIRECTORY'))
+            target = name if name else destination
+            self.other_installs.append(InstallTarget(command, target, directories, 'DIRECTORY'))
         if files:
             install_type = linkage if linkage == 'EXECUTABLE' else 'FILES'
-            self.other_installs.append(InstallTarget(command, name, files, install_type))
+            target = name if name else destination
+            self.other_installs.append(InstallTarget(command, target, files, install_type))
 
 
 if __name__ == '__main__':

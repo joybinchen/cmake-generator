@@ -24,15 +24,20 @@ class CmakeConverter(PathUtils):
         self.common_configs = {}
 
     def convert(self):
-        for target, command_source in self.db.linkings.items():
-            self.write_linked_target(target, command_source)
-        for cmd_id, target_sources in self.db.targets.items():
-            self.write_unlinked_target(cmd_id, target_sources)
+        generators = CmakeConverter.generators
+        targets = self.db.targets
+        linkings = self.db.linkings
+        for target, command_source in linkings.items():
+            self.generate_linked_target(target, command_source)
+        targets = self.db.targets
+        for cmd_id, target_sources in targets.items():
+            self.generate_unlinked_target(cmd_id, target_sources)
         migrated_commands = self.db.extract_migrated_commands()
         for cmd_id, destination_sources in migrated_commands.items():
-            self.write_migrated_install_target(cmd_id, destination_sources)
-        for cmd_id, destination_sources in self.db.installs.items():
-            self.write_install_target(cmd_id, set(destination_sources.values()))
+            self.generate_migrated_install_target(cmd_id, destination_sources)
+        installs = self.db.installs
+        for cmd_id, destination_sources in installs.items():
+            self.generate_install_target(cmd_id, destination_sources)
         destinations = set()
         for d in migrated_commands.values():
             for dest, _ in d.keys():
@@ -44,13 +49,17 @@ class CmakeConverter(PathUtils):
 
         external_dests = tuple(filter(lambda d: not d.startswith(self.directory), destinations))
         cmake_install_prefix = os.path.commonpath(external_dests) if external_dests else "/usr/local"
-        generators = CmakeConverter.generators.values()
-        for generator in generators:
+        generator_keys = list(generators.keys())
+        for key in generator_keys:
+            generator = generators[key]
             generator.set_install_prefix(cmake_install_prefix)
-            generator.setup_output()
+            directory = generator.setup_output()
+            name = self.get_name_for_generator(directory)
+            if name != key:
+                generators[name] = generator
             generator.write_to_file()
 
-    def write_linked_target(self, target, command_source):
+    def generate_linked_target(self, target, command_source):
         commands = command_source.keys()
         if len(commands) > 1:
             warn("target %s created by multiple command:\n%s" % (target, commands))
@@ -150,7 +159,7 @@ class CmakeConverter(PathUtils):
                 source, product, '\n\t'.join(sources), cmd_id, '' if sources else target_sources))
         return False
 
-    def write_unlinked_target(self, cmd_id, target_sources):
+    def generate_unlinked_target(self, cmd_id, target_sources):
         if not target_sources: return
         command = self.db.command[cmd_id]
         linkage = command.linkage
@@ -169,10 +178,11 @@ class CmakeConverter(PathUtils):
             files.update(command.missing_depends)
             self.output_library(cmd_id, command, sorted(files), linkage)
 
-    def write_migrated_install_target(self, cmd_id, destination_sources):
+    def generate_migrated_install_target(self, cmd_id, destination_sources):
         command = self.db.install_command[cmd_id]
         generator = self.get_cmake_generator(command.cwd)
-        files = set()
+        install_destination = None
+        files = {}
         for destination, sources in destination_sources.items():
             dest_pattern, file_pattern = destination
             if file_pattern:
@@ -181,20 +191,37 @@ class CmakeConverter(PathUtils):
                 continue
             if len(sources) != 1:
                 warn("Install target %s fail to migrate by install cmd #%s" % (destination, cmd_id))
-            for f in sources:
-                command.destination = f[0]
-                files.add(f[1])
-        if files: self.write_install_target(cmd_id, files)
+            for dest, file in sources:
+                files[dest] = file
+                if install_destination is None:
+                    install_destination = dest
+                elif install_destination != dest:
+                    install_destination = ""
+        if files: self.generate_install_target(cmd_id, files, install_destination)
 
-    def write_install_target(self, cmd_id, files):
+    def generate_install_target(self, cmd_id, files, destination=''):
         command = self.db.install_command[cmd_id]
         generator = self.get_cmake_generator(command.cwd)
-        name = name_by_common_prefix(list(files), self.root_dir)
-        info("Target %s installed by cmd #%s to %s" % (name, cmd_id, ' '.join([self.relpath(f) for f in files])))
-        install_groups = group_keys_by_vv(files, self.db.objects)
-        for cmd_id, file_set in install_groups.items():
-            linkage = self.db.command_linkage(cmd_id) if cmd_id >= 0 else 'FILES'
-            generator.output_cmake_install(name, command, file_set, linkage)
+        prefix = os.path.commonprefix(list(files.keys()))
+        name = prefix if prefix.endswith('/') else (os.path.dirname(prefix) + '/')
+        for dest in files.keys():
+            if dest[len(name):].find('/') > 0:
+                name = ''
+                break
+        if name:
+            info("Target %s installed by cmd #%s to %s" % (name, cmd_id, ' '.join([self.relpath(f) for f in files])))
+            install_groups = group_keys_by_vv(files, self.db.objects)
+            for cmd_id, file_set in install_groups.items():
+                linkage = self.db.command_linkage(cmd_id) if cmd_id >= 0 else 'FILES'
+                generator.output_cmake_install(name, command, file_set, linkage)
+            return
+        for dest, file in files.items():
+            install_groups = group_keys_by_vv({dest: file}, self.db.objects)
+            for cmd_id, file_set in install_groups.items():
+                name = destination if destination else dest
+                info("Target %s installed by cmd #%s to %s" % (name, cmd_id, ' '.join([self.relpath(f) for f in files])))
+                linkage = self.db.command_linkage(cmd_id) if cmd_id >= 0 else 'FILES'
+                generator.output_cmake_install(name, command, {file, }, linkage)
 
     def get_root_generator(self):
         return self.get_cmake_generator(self.root_dir)
@@ -202,13 +229,17 @@ class CmakeConverter(PathUtils):
     def get_cmd_generator(self, cmd_id):
         return self.get_cmake_generator(self.db.command_cwd(cmd_id))
 
-    def get_cmake_generator(self, directory):
-        if self.single_file:
-            directory = self.directory
+    def get_name_for_generator(self, directory):
         if directory == self.directory or directory == self.directory + '/':
             name = self.name
         else:
             name = "%s-%s" % (self.name, self.relpath(directory))
+        return name
+
+    def get_cmake_generator(self, directory):
+        if self.single_file:
+            directory = self.directory
+        name = self.get_name_for_generator(directory)
         generators = CmakeConverter.generators
         return self.cmake_generator(directory, name, generators)
 
