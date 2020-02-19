@@ -5,6 +5,7 @@ from io import StringIO
 from .utils import *
 from .migration import get_common_values, migrate_command, name_by_common_prefix
 from .target import *
+from .libnames import LIBNAME_MAP
 
 logger, info, debug, warn, error = get_loggers(__name__)
 
@@ -22,6 +23,8 @@ class CmakeGenerator(PathUtils):
         self.single_file = single_file
         # targets: {t.name: t, t.target: t, }
         self.targets = {}
+        self.variables = {}
+        self.packages = {}
         self.other_installs = []
         self.common_configs = {}
         self.install_prefix = '/'
@@ -75,8 +78,11 @@ class CmakeGenerator(PathUtils):
         self.generated = True
         self.write_project_header()
         self.output.write(self.stream.getvalue())
+        self.collect_package_imports()
+        self.write_find_packages()
         self.collect_common_configs()
         self.write_common_configs()
+        self.write_var_definitions()
         self.write_targets()
 
     def collect_common_configs(self):
@@ -88,11 +94,50 @@ class CmakeGenerator(PathUtils):
             self.common_configs[arg_name] = get_common_values(arg_values)
         return args_with_common
 
+    def get_lib_replacement(self, libs):
+        replacement = {}
+        for option in list(libs):
+            if option.startswith('-l'):
+                lib = option[2:]
+            elif option[:1] not in ('$', '-'):
+                lib = option
+            else:
+                continue
+
+            if lib not in LIBNAME_MAP: continue
+            lib, module, var_lib, var_include = LIBNAME_MAP[lib]
+            if lib is None: continue
+            self.generate_find_package_command(lib, module, var_lib, var_include)
+            replacement[option] = ('${%s}' % var_lib) if var_lib.find("::") < 0 else var_lib
+        return replacement
+
+    @staticmethod
+    def replace_list_content(libs, replacement):
+        for option, lib in replacement.items():
+            libs.remove(option)
+            libs.add(lib)
+
+    def collect_package_imports(self):
+        for target in self.targets.values():
+            if not isinstance(target, CppTarget): continue
+            replacement = self.get_lib_replacement(target.libs)
+            self.replace_list_content(target.libs, replacement)
+
     def write_common_configs(self):
         args_with_common = ('options', 'link_options', 'definitions',
                             'includes', 'system_includes', 'iquote_includes')
         for arg_name in args_with_common:
             self.output_project_common_args(arg_name, self.common_configs[arg_name])
+
+    def write_find_packages(self):
+        for name, target in sorted(self.packages.items()):
+            target.bind(self)
+            target.output_target()
+
+    def write_var_definitions(self):
+        for name, target in sorted(self.variables.items()):
+            target.bind(self)
+            target.output_target()
 
     def write_targets(self):
         targets = []
@@ -167,6 +212,18 @@ class CmakeGenerator(PathUtils):
                 migrated.append(target)
         return migrated
 
+    def generate_find_package_command(self, lib, module, var_lib, var_include):
+        for name in (lib, var_lib, var_include):
+            if name != self.unique_name(name):
+                warn("Variable name %s for imported library %s %s is already occupied." % (name, lib, module))
+        definition = self.packages.get(lib, None)
+        if module and definition is not None:
+            definition.add_module(module)
+        else:
+            definition = FindPackageDefinition(lib, module)
+            self.packages[lib] = definition
+        return definition
+
     def output_project_common_args(self, arg_name, values):
         if not values:
             return
@@ -222,6 +279,13 @@ class CmakeGenerator(PathUtils):
         used_path = self.used_names.get(name)
         if used_path is not None:
             info('use_target_name %s with duplicate path: %s %s on %s' % (name, path, used_path, self.directory))
+            name = self.unique_name(name)
+        self.used_names[name] = path
+        self.used_names[path] = name
+        return name
+
+    def unique_name(self, name):
+        if name in self.used_names:
             index = 2
             while True:
                 candidate = '{}_{}'.format(name, index)
@@ -229,8 +293,7 @@ class CmakeGenerator(PathUtils):
                     name = candidate
                     break
                 index = index + 1
-        self.used_names[name] = path
-        self.used_names[path] = name
+        self.used_names[name] = name
         return name
 
     def output_subdirectory(self, directory):
@@ -291,6 +354,30 @@ class CmakeGenerator(PathUtils):
         self.targets[target] = CustomCommandTarget(command, target, sources)
         if name != output_name:
             self.targets[target].set_name(name)
+
+    def output_var_definition(self, name, sources):
+        self.variables[name] = UserVarDefinition(name, sources)
+
+    def output_qt_wrapper(self, name, sources, wrapper):
+        self.variables[name] = QtWrapDefinition(wrapper, name, sources)
+
+    def extract_generated_source_files(self, name, files, bucket, kind, wrapper):
+        sources = set()
+        targets = set()
+        for file in files:
+            if file in bucket:
+                targets.add(file)
+                for cmd_id, bucket_sources in bucket[file].items():
+                    for source in bucket_sources: sources.add(source)
+        if targets:
+            for target in targets:
+                if target in files: files.remove(target)
+        if sources:
+            var_name = "%s_%s_SRCS" % (name, kind)
+            var_name = self.unique_name(var_name)
+            self.output_qt_wrapper(var_name, sources, wrapper)
+            # self.output_var_definition(var_name, sources)
+            files.add('${%s}' % var_name)
 
     def migrate_custom_targets(self, cmd_id, command, dest_pattern, src_pattern, paths, kind="Locales"):
         fields = []

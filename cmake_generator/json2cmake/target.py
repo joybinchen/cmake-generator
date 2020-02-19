@@ -3,7 +3,9 @@ import traceback
 from .utils import PathUtils, relpath, resolve, get_loggers, basestring, cmake_resolve_binary, cmake_resolve_source
 
 __all__ = ['CmakeTarget', 'CppTarget', 'ExecutableTarget', 'LibraryTarget', 'LocaleTarget', 'InstallTarget',
-           'OutputWithIndent', 'CustomCommandTarget', 'WrappedTarget', 'ForeachTargetWrapper']
+           'OutputWithIndent', 'CustomCommandTarget', 'WrappedTarget', 'ForeachTargetWrapper',
+           'UserVarDefinition', 'QtWrapDefinition', 'FindPackageDefinition'
+           ]
 
 logger, info, debug, warn, error = get_loggers(__name__)
 
@@ -66,12 +68,8 @@ class CmakeTarget(object):
     def __init__(self, command, target, sources, name=None):
         self.command = command
         self.common_configs = {}
-        self.compiler = command.compiler
         self.target = target
         self.sources = set()
-        self.libs = command.libs
-        self.include_binary_dir = command.include_binary_dir
-        self.referenced_libs = command.referenced_libs
         self.name_ = name if name else os.path.basename(target)
         self.parent = None
         self.generator = None
@@ -80,6 +78,11 @@ class CmakeTarget(object):
         self.depends = set()
         self.destinations = set()
         self.output_name = None
+        if command:
+            self.libs = command.libs
+            self.compiler = command.compiler
+            self.include_binary_dir = command.include_binary_dir
+            self.referenced_libs = command.referenced_libs
         if sources:
             self.add_sources(sources)
 
@@ -107,6 +110,9 @@ class CmakeTarget(object):
 
     def set_command(self, command):
         self.command.update(command)
+
+    def get_options(self):
+        return []
 
     def set_destination(self, destination):
         self.destinations.add(destination)
@@ -160,7 +166,7 @@ class CmakeTarget(object):
         if self.generator is None:
             raise Exception('generator is None')
         command = self.cmake_command()
-        options = self.get_options()
+        options = ' '.join(self.get_options())
         name = self.name()
         sources = [s % pattern_replace for s in self.get_sources()]
         self.output.write_command(command, options, name, sources)
@@ -197,9 +203,13 @@ class CppTarget(CmakeTarget):
         output_name = self.get_name()
         binary_dir = self.generator.binary_dir
         parts = []
+        refers = []
         for s in self.sources:
             if s in self.referenced_libs: continue
-            if s.startswith(binary_dir + '/'):
+            if s.startswith('${') and s.endswith('}'):
+                refers.append(s)
+                continue
+            elif s.startswith(binary_dir + '/'):
                 part = cmake_resolve_binary(s, binary_dir)
             else:
                 part = self.generator.relpath(s)
@@ -207,10 +217,12 @@ class CppTarget(CmakeTarget):
         parts = sorted(parts)
         var_name = name.upper() + '_SRCS'
         var_refer = '${%s}' % var_name
+        refers.append(var_refer)
         self.output_list_definition(var_name, parts)
         if self.command.compile_c_as_cxx:
-            self.write_command('set_source_files_properties', 'PROPERTIES', var_refer, 'LANGUAGE CXX')
-        self.write_command(command, options, name, var_refer)
+            for var_refer in refers:
+                self.write_command('set_source_files_properties', 'PROPERTIES', var_refer, 'LANGUAGE CXX')
+        self.write_command(command, options, name, refers)
         if name != output_name:
             self.output.set_property('TARGET', name, 'LIBRARY_OUTPUT_NAME', output_name)
         self.output_target_config(self.name())
@@ -221,25 +233,32 @@ class CppTarget(CmakeTarget):
             self.install_files('TARGETS', destination, self.name())
         self.output.finish()
 
+    def get_unique_config(self, name, common_configs=None):
+        configs = self.get_values(name)
+        if common_configs is None:
+            common_configs = self.generator.common_configs.get(name, [])
+        unique_configs = list(filter(lambda x: x not in common_configs, configs))
+        return unique_configs
+
     def get_options(self):
-        return self.get_values('options')
+        return self.get_unique_config('options')
 
     def get_link_options(self):
-        return self.get_values('link_options')
+        return self.get_unique_config('link_options')
 
     def get_definitions(self):
-        return self.get_values('definitions')
+        return self.get_unique_config('definitions')
 
     def get_includes(self):
-        includes = self.get_values('includes')
+        includes = self.get_unique_config('includes')
         # print('get_includes for ', self.get_name(), includes)
         return includes
 
     def get_system_includes(self):
-        return self.get_values('system_includes')
+        return self.get_unique_config('system_includes')
 
     def get_iquote_includes(self):
-        return self.get_values('iquote_includes')
+        return self.get_unique_config('iquote_includes')
 
     def cmake_command(self):
         return 'add_library'
@@ -369,6 +388,51 @@ class CustomCommandTarget(CmakeTarget):
     def custom_target_output_args(self):
         prefix = CustomCommandTarget.CUSTOM_TARGET_OUTPUT_CONFIG.get(self.compiler, ' ')
         return prefix + relpath(self.target, self.generator.binary_dir)
+
+
+class UserVarDefinition(CmakeTarget):
+    def __init__(self, name, sources):
+        super(UserVarDefinition, self).__init__(None, name, sources)
+
+    def cmake_command(self):
+        return 'set'
+
+    def with_components(self):
+        return ''
+
+    def output_target(self, pattern_replace={}):
+        command = self.cmake_command()
+        name = self.name()
+        sources = [self.generator.relpath(s % pattern_replace) for s in self.get_sources()]
+        self.output.write_command(command, self.with_components(), name, sources, self.command_options())
+        self.output.finish()
+
+
+class QtWrapDefinition(UserVarDefinition):
+    def __init__(self, kind, name, sources):
+        super(QtWrapDefinition, self).__init__(name, sources)
+        self.kind = kind
+
+    def cmake_command(self):
+        return self.kind
+
+
+class FindPackageDefinition(UserVarDefinition):
+    def __init__(self, name, module):
+        super(FindPackageDefinition, self).__init__(name, [])
+        if module: self.add_module(module)
+
+    def add_module(self, module):
+        if module: self.sources.add(module)
+
+    def cmake_command(self):
+        return "find_package"
+
+    def command_options(self):
+        return "REQUIRED"
+
+    def with_components(self):
+        return 'COMPONENTS' if self.sources else ''
 
 
 class InstallTarget(CmakeTarget):

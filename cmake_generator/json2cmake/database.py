@@ -24,6 +24,12 @@ class CompilationDatabase(PathUtils):
         self.objects = {}
         # linkings: {target: {cmd_id: {object_file, ...}, ...}, ...}
         self.linkings = {}
+        # qt_moc_bucket: {target: {cmd_id: {object_file, ...}, ...}, ...}
+        self.qt_moc_bucket = {}
+        # qt_ui_bucket: {target: {cmd_id: {object_file, ...}, ...}, ...}
+        self.qt_ui_bucket = {}
+        # qt_rc_bucket: {target: {cmd_id: {object_file, ...}, ...}, ...}
+        self.qt_rc_bucket = {}
         # installs: {cmd_id: {destination: {target, ...}, ...}, ...}
         self.installs = {}
         self.install_command = []
@@ -109,13 +115,25 @@ class CompilationDatabase(PathUtils):
         self.sources.setdefault(source, {})[target] = cmd_id
         self.objects.setdefault(target, {})[source] = cmd_id
         self.targets.setdefault(cmd_id, {}).setdefault(target, set()).add(source)
-        if cmd.linkage not in ('OBJECT', 'LOCALE', None):
-            self.update_linking_index(target, cmd_id, source)
+        if cmd.linkage == 'SOURCE':
+            compiler = cmd.compiler
+            if compiler == 'uic':
+                self.update_linking_index(target, cmd_id, source, self.qt_ui_bucket)
+            elif compiler == 'moc':
+                self.update_linking_index(target, cmd_id, source, self.qt_moc_bucket)
+            elif compiler == 'rcc':
+                self.update_linking_index(target, cmd_id, source, self.qt_rc_bucket)
+            else:
+                self.update_linking_index(target, cmd_id, source)
+        elif cmd.linkage not in ('OBJECT', 'LOCALE', None):
+            self.update_linking_index(target, cmd_id, source, self.linkings)
 
-    def update_linking_index(self, target, cmd_id, file_):
+    def update_linking_index(self, target, cmd_id, file_, bucket=None):
         debug("Add linked target %s from %s"
               % (self.relpath(target), self.relpath(file_)))
         self.linkings.setdefault(target, {}).setdefault(cmd_id, set()).add(file_)
+        if bucket is not None:
+            bucket.setdefault(target, {}).setdefault(cmd_id, set()).add(file_)
 
     def extract_migrated_commands(self):
         migratables = [(cmd_id, tuple(x.keys())[0], tuple(x.values())[0]) for cmd_id, x in

@@ -65,6 +65,9 @@ class CmakeConverter(PathUtils):
             warn("target %s created by multiple command:\n%s" % (target, commands))
         for cmd_id, files in command_source.items():
             command = self.db.command[cmd_id]
+            if command.linkage == "SOURCE":
+                if command.compiler in ('uic', 'moc', 'rcc'):
+                    return
             generator = self.get_cmake_generator(command.cwd)
             CmakeConverter.write_command_for_linked_target(
                 command, target, files, generator, self.db, self.directory)
@@ -83,6 +86,10 @@ class CmakeConverter(PathUtils):
                  ' '.join([relpath(f, directory) for f in files])))
         source_files, referenced_libs, compilations, depends = CmakeConverter.classify_source_files(
             files, target, db, directory)
+        generator.extract_generated_source_files(output_name, source_files, db.qt_ui_bucket, "ui", "qt5_wrap_ui")
+        generator.extract_generated_source_files(output_name, source_files, db.qt_rc_bucket, "rc", "qt5_add_resources")
+        generator.extract_generated_source_files(output_name, source_files, db.qt_moc_bucket, "moc", "qt5_wrap_cpp")
+
         command = command.copy()
         CmakeConverter.update_referenced_libs(command, referenced_libs)
         CmakeConverter.migrate_sub_compilations(command, compilations, target, output_name, db)

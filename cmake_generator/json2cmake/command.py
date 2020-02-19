@@ -59,13 +59,18 @@ class Command(object):
             items = command.__dict__.items()
         for k, v in items:
             value = getattr(self, k, v)
-            if type(v) in (set, tuple, frozenset):
-                value = list(v)
+            if isinstance(value, tuple):
+                value = list(value)
                 setattr(self, k, value)
-            if isinstance(v, list):
+            elif isinstance(value, frozenset):
+                value = set(value)
+                setattr(self, k, value)
+            if isinstance(value, list):
                 for part in v:
                     if part not in value:
                         value.append(part)
+            elif isinstance(value, set):
+                value.update(v)
             elif v and not getattr(self, k, None):
                 setattr(self, k, v)
 

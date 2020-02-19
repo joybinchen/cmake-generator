@@ -215,14 +215,15 @@ def group_keys_by_vv(files, objects):
 
 
 def get_common_values(arg_values):
-    common_values = None
+    value_filter = None
     for values in arg_values:
         if values:
-            if common_values is None:
-                common_values = list(values)
+            if value_filter is None:
+                value_filter = iter(values)
                 continue
-            for v in common_values:
-                if v not in values:
-                    common_values.remove(v)
-    if common_values is None: common_values = []
+            value_filter = filter(lambda x: x in values, value_filter)
+    if value_filter is None:
+        common_values = []
+    else:
+        common_values = list(value_filter)
     return common_values
