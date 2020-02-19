@@ -15,6 +15,7 @@ class CmakeGenerator(PathUtils):
     def __init__(self, name, cwd, root_dir, single_file=False):
         PathUtils.__init__(self, cwd, root_dir)
         self.generated = False
+        self.binary_dir = cwd
         self.name = name
         self.stream = StringIO()
         self.output = None
@@ -61,7 +62,9 @@ class CmakeGenerator(PathUtils):
         directory = self.directory
         if output is None:
             directory = self.guess_source_dir(directory, self.targets)
-            self.directory = directory
+            if self.directory != directory:
+                self.binary_dir = self.directory
+                self.directory = directory
             self.output = open(os.path.join(directory, 'CMakeLists.txt'), 'w')
         else:
             self.output = output

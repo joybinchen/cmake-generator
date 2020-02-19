@@ -18,9 +18,10 @@ def parse_command(command_line, source, cwd=CWD, root_dir=DIR):
 
 
 class MockCmakeGenerator:
-    def __init__(self, output, directory):
+    def __init__(self, output, directory, bin_dir=None):
         self.output = output
         self.directory = directory
+        self.binary_dir = bin_dir if bin_dir else os.path.join(directory, 'Debug')
         self.root_dir = directory
         self.install_prefix = '/usr/local'
         self.common_configs = {}

@@ -1,6 +1,6 @@
 import os
 import traceback
-from .utils import PathUtils, relpath, resolve, get_loggers, basestring, cmake_resolve_binary
+from .utils import PathUtils, relpath, resolve, get_loggers, basestring, cmake_resolve_binary, cmake_resolve_source
 
 __all__ = ['CmakeTarget', 'CppTarget', 'ExecutableTarget', 'LibraryTarget', 'LocaleTarget', 'InstallTarget',
            'OutputWithIndent', 'CustomCommandTarget', 'WrappedTarget', 'ForeachTargetWrapper']
@@ -195,7 +195,16 @@ class CppTarget(CmakeTarget):
         options = self.command_options()
         name = self.name()
         output_name = self.get_name()
-        parts = sorted(map(self.generator.relpath, filter(lambda p: p not in self.referenced_libs, self.sources)))
+        binary_dir = self.generator.binary_dir
+        parts = []
+        for s in self.sources:
+            if s in self.referenced_libs: continue
+            if s.startswith(binary_dir + '/'):
+                part = cmake_resolve_binary(s, binary_dir)
+            else:
+                part = self.generator.relpath(s)
+            parts.append(part)
+        parts = sorted(parts)
         var_name = name.upper() + '_SRCS'
         var_refer = '${%s}' % var_name
         self.output_list_definition(var_name, parts)
@@ -321,6 +330,8 @@ class CustomCommandTarget(CmakeTarget):
         'glib-genmarshal': '--output ',
         'dbus-binding-tool': '--output=',
         'moc': '-o ',
+        'uic': '-o ',
+        'rcc': '-o ',
         'msgfmt': '-o ',
     }
 
@@ -344,14 +355,20 @@ class CustomCommandTarget(CmakeTarget):
         command_line = 'COMMAND %s %s' % (self.compiler, ' '.join(self.get_options()))
         parts = []
         parts.append(command_line)
-        parts += [self.generator.relpath(s % pattern_replace) for s in self.get_sources()]
+        source_parts = []
+        sources = self.get_sources()
+        for s in sources:
+            s = s % pattern_replace
+            source = cmake_resolve_source(s, self.generator.directory)
+            source_parts.append(source)
+        parts += source_parts
         output_args = self.custom_target_output_args()
         self.output.write_command('add_custom_command', '', target, parts, output_args)
         self.output.finish()
 
     def custom_target_output_args(self):
         prefix = CustomCommandTarget.CUSTOM_TARGET_OUTPUT_CONFIG.get(self.compiler, ' ')
-        return prefix + cmake_resolve_binary(self.target, self.generator.directory)
+        return prefix + relpath(self.target, self.generator.binary_dir)
 
 
 class InstallTarget(CmakeTarget):

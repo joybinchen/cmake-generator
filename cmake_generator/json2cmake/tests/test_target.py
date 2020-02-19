@@ -203,8 +203,8 @@ class TestCustomCommandTarget(unittest.TestCase):
         output_text += '''
 add_custom_command(OUTPUT build/moc_mainwindow.cpp
 \tCOMMAND moc --include build/moc_predref.h -I/usr/include -DHAS_X11
-\tmain_window.hh
-\t-o ${CMAKE_CURRENT_BINARY_DIR}/build/moc_mainwindow.cpp
+\t${CMAKE_CURRENT_SOURCE_DIR}/main_window.hh
+\t-o build/moc_mainwindow.cpp
 )
 '''
         self.assertEqual(self.output.getvalue(), output_text)
@@ -216,8 +216,8 @@ add_custom_command(OUTPUT build/moc_mainwindow.cpp
         output_text += '''
 add_custom_command(OUTPUT device-dbus-glue.h
 \tCOMMAND dbus-binding-tool --mode=glib-server
-\tdevice.xml
-\t--output=${CMAKE_CURRENT_BINARY_DIR}/device-dbus-glue.h
+\t${CMAKE_CURRENT_SOURCE_DIR}/device.xml
+\t--output=device-dbus-glue.h
 )
 '''
         self.assertEqual(self.output.getvalue(), output_text)
@@ -236,8 +236,8 @@ add_custom_command(OUTPUT device-dbus-glue.h
         output_text += '''
 add_custom_command(OUTPUT build/moc_mainwindow.cpp
 \tCOMMAND moc --include ${CMAKE_CURRENT_SOURCE_DIR}/build/moc_predefs.h -I/usr/include -DHAVE_X11 -DPROGRAM_VERSION="1.5.0-RC2+git"
-\tmain_window.hh
-\t-o ${CMAKE_CURRENT_BINARY_DIR}/build/moc_mainwindow.cpp
+\t${CMAKE_CURRENT_SOURCE_DIR}/main_window.hh
+\t-o build/moc_mainwindow.cpp
 )
 '''
         self.assertEqual(self.output.getvalue(), output_text)

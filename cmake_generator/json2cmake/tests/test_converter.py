@@ -24,6 +24,9 @@ class MockCmakeGenerator(PathUtils):
     def name(self):
         return self.name_
 
+    def setup_output(self, output=None):
+        return self.directory
+
     def __getattr__(self, item):
         return MockGeneratorAttribute(item, self)
 

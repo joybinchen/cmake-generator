@@ -51,8 +51,13 @@ def relpath(path, base, root=None):
     return path
 
 
+def cmake_resolve_source(path, base):
+    return "${CMAKE_CURRENT_SOURCE_DIR}/%s" % relpath(path, base)
+
+
 def cmake_resolve_binary(path, base):
     return "${CMAKE_CURRENT_BINARY_DIR}/%s" % relpath(path, base)
+
 
 class PathUtils(object):
     def __init__(self, directory, root_dir):
