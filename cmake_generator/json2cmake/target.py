@@ -4,7 +4,7 @@ from .utils import PathUtils, relpath, resolve, get_loggers, basestring, cmake_r
 
 __all__ = ['CmakeTarget', 'CppTarget', 'ExecutableTarget', 'LibraryTarget', 'LocaleTarget', 'InstallTarget',
            'OutputWithIndent', 'CustomCommandTarget', 'WrappedTarget', 'ForeachTargetWrapper',
-           'UserVarDefinition', 'QtWrapDefinition', 'FindPackageDefinition'
+           'UserVarDefinition', 'QtWrapDefinition', 'FindPackageDefinition', 'PkgCheckModulesDefinition'
            ]
 
 logger, info, debug, warn, error = get_loggers(__name__)
@@ -35,8 +35,8 @@ class OutputWithIndent(object):
         if self.stream:
             self.writeln(None)
 
-    def write_command(self, command, options, name, parts, tail=''):
-        single_line = len(' '.join(parts)) < 40
+    def write_command(self, command, options, name, parts, tail='', line_limit=40):
+        single_line = len(' '.join(parts)) < line_limit
         delimiter = ' ' if single_line else '\n\t'
         if options: options = ' ' + options
         if tail: tail = delimiter + tail
@@ -79,10 +79,10 @@ class CmakeTarget(object):
         self.destinations = set()
         self.output_name = None
         if command:
-            self.libs = command.libs
+            self.libs = list(command.libs)
             self.compiler = command.compiler
             self.include_binary_dir = command.include_binary_dir
-            self.referenced_libs = command.referenced_libs
+            self.referenced_libs = command.referenced_libs.copy()
         if sources:
             self.add_sources(sources)
 
@@ -295,19 +295,24 @@ class CppTarget(CmakeTarget):
         self.write_command('target_include_directories', options, name, parts)
 
     def output_target_libs(self, name):
-        libs = set()
+        libs = []
         for lib, linkage in self.referenced_libs.items():
             if lib in self.generator.db.linkings:
                 target_name, output_name = self.generator.name_as_target(lib)
-                libs.add(target_name)
+                if target_name not in libs:
+                    libs.append(target_name)
             else:
                 refer = self.refer_linked_target(lib, linkage)
-                libs.add(refer if refer else lib)
+                if refer: lib = refer
+                if lib not in libs:
+                    libs.append(lib)
         if libs:
             debug("Target %s using referenced libs %s" % (name, ' '.join(libs)))
-        libs.update(self.libs)
+        for lib in self.libs:
+            if lib not in libs:
+                libs.append(lib)
         if libs:
-            self.write_command('target_link_libraries', 'PRIVATE', name, sorted(libs))
+            self.write_command('target_link_libraries', 'PRIVATE', name, libs)
 
     def refer_linked_target(self, f, linkage):
         if linkage in ('STATIC', 'SHARED'):
@@ -404,8 +409,7 @@ class UserVarDefinition(CmakeTarget):
         command = self.cmake_command()
         name = self.name()
         sources = [self.generator.relpath(s % pattern_replace) for s in self.get_sources()]
-        self.output.write_command(command, self.with_components(), name, sources, self.command_options())
-        self.output.finish()
+        self.output.write_command(command, self.with_components(), name, sources, self.command_options(), line_limit=180)
 
 
 class QtWrapDefinition(UserVarDefinition):
@@ -417,9 +421,25 @@ class QtWrapDefinition(UserVarDefinition):
         return self.kind
 
 
+class PkgCheckModulesDefinition(UserVarDefinition):
+    def __init__(self, name, lib):
+        super(PkgCheckModulesDefinition, self).__init__(name, [])
+        self.lib = lib
+
+    def cmake_command(self):
+        return "pkg_check_modules"
+
+    def command_options(self):
+        return self.lib
+
+    def with_components(self):
+        return 'REQUIRED'
+
+
 class FindPackageDefinition(UserVarDefinition):
-    def __init__(self, name, module):
+    def __init__(self, name, mode, module):
         super(FindPackageDefinition, self).__init__(name, [])
+        self.mode = mode
         if module: self.add_module(module)
 
     def add_module(self, module):
@@ -432,7 +452,7 @@ class FindPackageDefinition(UserVarDefinition):
         return "REQUIRED"
 
     def with_components(self):
-        return 'COMPONENTS' if self.sources else ''
+        return 'COMPONENTS' if self.sources else self.mode
 
 
 class InstallTarget(CmakeTarget):

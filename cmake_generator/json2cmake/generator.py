@@ -5,7 +5,7 @@ from io import StringIO
 from .utils import *
 from .migration import get_common_values, migrate_command, name_by_common_prefix
 from .target import *
-from .libnames import LIBNAME_MAP
+from .libnames import *
 
 logger, info, debug, warn, error = get_loggers(__name__)
 
@@ -104,18 +104,21 @@ class CmakeGenerator(PathUtils):
             else:
                 continue
 
-            if lib not in LIBNAME_MAP: continue
-            lib, module, var_lib, var_include = LIBNAME_MAP[lib]
-            if lib is None: continue
-            self.generate_find_package_command(lib, module, var_lib, var_include)
+            if lib in CMAKE_LIBS:
+                lib, module, var_lib, var_include = CMAKE_LIBS[lib]
+                self.generate_find_package_command(lib, module, var_lib, var_include)
+            elif lib in PKG_CONFIG_LIBS:
+                lib = PKG_CONFIG_LIBS[lib]
+                var_lib = self.generate_pkg_config_command(lib)
+            else: continue
             replacement[option] = ('${%s}' % var_lib) if var_lib.find("::") < 0 else var_lib
         return replacement
 
     @staticmethod
     def replace_list_content(libs, replacement):
         for option, lib in replacement.items():
-            libs.remove(option)
-            libs.add(lib)
+            if option in libs:
+                libs[libs.index(option)] = lib
 
     def collect_package_imports(self):
         for target in self.targets.values():
@@ -212,19 +215,35 @@ class CmakeGenerator(PathUtils):
                 migrated.append(target)
         return migrated
 
+    def generate_pkg_config_command(self, lib):
+        prefix = lib.upper().replace('-', '')
+        var_lib = prefix + "_LIBRARIES"
+        var_include = prefix + "_INCLUDE_DIRS"
+        if var_lib != self.unique_name(var_lib):
+            warn("Variable %s for imported library %s is occupied." % (var_lib, lib))
+        if var_include != self.unique_name(var_include):
+            warn("Variable %s for imported library %s is occupied." % (var_include, lib))
+        if '_' not in self.packages:
+            self.packages['_'] = FindPackageDefinition('PkgConfig', '', None)
+        self.packages[lib] = definition = PkgCheckModulesDefinition(prefix, lib)
+        return var_lib
+
     def generate_find_package_command(self, lib, module, var_lib, var_include):
-        for name in (lib, var_lib, var_include):
-            if name != self.unique_name(name):
-                warn("Variable name %s for imported library %s %s is already occupied." % (name, lib, module))
+        mode = 'MODULE'
+        if var_lib != self.unique_name(var_lib):
+            warn("Variable %s for imported library %s %s is occupied." % (var_lib, lib, module))
+        if var_include != self.unique_name(var_include):
+            warn("Variable %s for imported library %s %s is occupied." % (var_include, lib, module))
         definition = self.packages.get(lib, None)
         if module and definition is not None:
             definition.add_module(module)
         else:
-            definition = FindPackageDefinition(lib, module)
+            definition = FindPackageDefinition(lib, mode, module)
             self.packages[lib] = definition
         return definition
 
     def output_project_common_args(self, arg_name, values):
+        self.output.write('\n')
         if not values:
             return
         if arg_name.endswith('includes'):

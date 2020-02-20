@@ -38,7 +38,7 @@ class Command(object):
         self.includes = []
         self.system_includes = []
         self.iquote_includes = []
-        self.libs = set()
+        self.libs = []
         self.referenced_libs = {}
         self.missing_depends = set()
         self.linkage = 'SOURCE'
@@ -137,7 +137,7 @@ class Command(object):
             elif word in ('-shared',):
                 self.link_options.append(word)
             elif word == '-pthread':
-                self.libs.add('${CMAKE_THREAD_LIBS_INIT}')
+                self.libs.append('${CMAKE_THREAD_LIBS_INIT}')
                 self.use_thread = True
             elif word.startswith('-x') and self.compiler == 'clang':
                 word = next(words) if word == '-x' else word[2:]
@@ -153,16 +153,16 @@ class Command(object):
             elif word in ['-MT', '-MF', '-MQ', '-MD', '-MMD', '-ccc-gcc-name']:
                 next(words)
             elif word.startswith('-L'):
-                self.libs.add(word if len(word) > 2 else ('-L'+next(words)))
+                self.libs.append(word if len(word) > 2 else ('-L'+next(words)))
             elif word.startswith('-l'):
-                self.libs.add(word[2:] or next(words))
+                self.libs.append(word[2:] or next(words))
             elif word in ['-g', '-O1', '-O2', '-O3']:
                 continue
             elif word == '-O':
                 next(words)
             elif word.startswith('-m'):
                 self.options.append(word)
-                self.libs.add(word)
+                self.libs.append(word)
             elif word == '-shared':
                 self.options.append(word)
                 self.linkage = 'SHARED'
