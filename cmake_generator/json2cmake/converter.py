@@ -56,6 +56,7 @@ class CmakeConverter(PathUtils):
             directory = generator.setup_output()
             name = self.get_name_for_generator(directory)
             if name != key:
+                generator.name = name
                 generators[name] = generator
             generator.write_to_file()
 
