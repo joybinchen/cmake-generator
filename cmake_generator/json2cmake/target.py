@@ -66,6 +66,7 @@ class OutputWithIndent(object):
 
 class CmakeTarget(object):
     def __init__(self, command, target, sources, name=None):
+        self.generated = False
         self.command = command
         self.common_configs = {}
         self.target = target
@@ -163,6 +164,8 @@ class CmakeTarget(object):
         return ''
 
     def output_target(self, pattern_replace={}):
+        if self.generated: return
+        self.generated = True
         if self.generator is None:
             raise Exception('generator is None')
         command = self.cmake_command()
@@ -197,6 +200,8 @@ class CppTarget(CmakeTarget):
         super(CppTarget, self).__init__(command, target, sources)
 
     def output_target(self, pattern_replace={}):
+        if self.generated: return
+        self.generated = True
         command = self.cmake_command()
         options = self.command_options()
         name = self.name()
@@ -375,6 +380,8 @@ class CustomCommandTarget(CmakeTarget):
         return values
 
     def output_target(self, pattern_replace={}):
+        if self.generated: return
+        self.generated = True
         target = 'OUTPUT ' + self.generator.relpath(self.target % pattern_replace)
         command_line = 'COMMAND %s %s' % (self.compiler, ' '.join(self.get_options()))
         parts = []
@@ -406,6 +413,8 @@ class UserVarDefinition(CmakeTarget):
         return ''
 
     def output_target(self, pattern_replace={}):
+        if self.generated: return
+        self.generated = True
         command = self.cmake_command()
         name = self.name()
         sources = [self.generator.relpath(s % pattern_replace) for s in self.get_sources()]
@@ -467,6 +476,8 @@ class InstallTarget(CmakeTarget):
         self.destinations.add(target)
 
     def output_target(self, pattern_replace={}):
+        if self.generated: return
+        self.generated = True
         for destination in self.get_destinations():
             destination = destination % pattern_replace
             sources = [s % pattern_replace for s in self.get_sources()]
@@ -508,6 +519,8 @@ class ForeachTargetWrapper(WrappedTarget):
             child.bind(generator)
 
     def output_target(self, pattern_replace={}):
+        if self.generated: return
+        self.generated = True
         self.write_command('foreach', '', self.name(), self.get_sources())
         pattern_replace = pattern_replace.copy()
         pattern_replace.update({str(self.indent): '${%s}' % self.name()})

@@ -5,7 +5,7 @@ from io import StringIO
 from .utils import *
 from .migration import get_common_values, migrate_command, name_by_common_prefix
 from .target import *
-from .libnames import *
+from .pkgmap import *
 
 logger, info, debug, warn, error = get_loggers(__name__)
 
@@ -78,9 +78,10 @@ class CmakeGenerator(PathUtils):
         self.generated = True
         self.write_project_header()
         self.output.write(self.stream.getvalue())
-        self.collect_package_imports()
+        lib_replacement, include_replacement = self.collect_package_imports()
         self.write_find_packages()
         self.collect_common_configs()
+        self.replace_with_package_vars(lib_replacement, include_replacement)
         self.write_common_configs()
         self.write_var_definitions()
         self.write_targets()
@@ -95,7 +96,7 @@ class CmakeGenerator(PathUtils):
         return args_with_common
 
     def get_lib_replacement(self, libs):
-        replacement = {}
+        lib2option = {}
         for option in list(libs):
             if option.startswith('-l'):
                 lib = option[2:]
@@ -103,28 +104,184 @@ class CmakeGenerator(PathUtils):
                 lib = option
             else:
                 continue
+            lib2option[lib] = option
+        libs = sorted(lib2option.keys())
 
+        mapping = {}
+        replacement = {}
+        lib2packages = {}
+        for lib in list(libs):
             if lib in CMAKE_LIBS:
-                lib, module, var_lib, var_include = CMAKE_LIBS[lib]
-                self.generate_find_package_command(lib, module, var_lib, var_include)
-            elif lib in PKG_CONFIG_LIBS:
-                lib = PKG_CONFIG_LIBS[lib]
-                var_lib = self.generate_pkg_config_command(lib)
-            else: continue
-            replacement[option] = ('${%s}' % var_lib) if var_lib.find("::") < 0 else var_lib
+                package, module, var_lib, var_include = CMAKE_LIBS[lib]
+                mapping[lib] = package if module is None else (package + module)
+                self.generate_find_package_command(package, module, var_lib, var_include)
+                replacement[lib] = ('${%s}' % var_lib) if var_lib.find("::") < 0 else var_lib
+            elif lib in PKG_CONFIG_LIB2PKGS:
+                packages = PKG_CONFIG_LIB2PKGS[lib]
+                lib2packages[lib] = packages
+                if len(packages) != 1: continue
+
+                package = next(iter(packages))
+                mapping[lib] = package
+                prefix = package.upper().replace('-', '')
+                var_lib = prefix + "_LIBRARIES"
+                if package not in self.packages:
+                    var_name = self.unique_name(var_lib)
+                    if var_lib != var_name:
+                        warn("Variable %s for imported library %s is occupied." % (var_lib, lib))
+                    self.generate_pkg_config_command(package, prefix)
+                replacement[lib] = '${%s}' % var_lib
+            else:
+                continue
+
+        candidates = set()
+        confirmed = set()
+        for lib in self.packages.keys():
+            packages = set(PKG_CONFIG_LIBS.get(lib, []))
+            provided = packages.intersection(libs)
+            confirmed.update(provided)
+        for lib, packages in list(lib2packages.items()):
+            intersection = packages.intersection(confirmed)
+            if intersection:
+                lib2packages[lib] = intersection
+            else:
+                candidates.update(packages)
+
+        libset = set(libs)
+        unconfirmed = sorted(candidates.difference(confirmed))
+        for package in unconfirmed:
+            needed = libset.difference(confirmed)
+            if not needed:
+                break
+            libraries = set(PKG_CONFIG_LIBS[package])
+            provided = needed.intersection(libraries)
+            if not provided:
+                continue
+            diff = libraries.difference(libset)
+            if not diff:
+                prefix = package.upper().replace('-', '')
+                if package not in self.packages:
+                    self.generate_pkg_config_command(package, prefix)
+
+                var_lib = prefix + "_LIBRARIES"
+                var_name = self.unique_name(var_lib)
+                if var_lib != var_name:
+                    warn("Variable %s for imported library %s is occupied." % (var_lib, lib))
+                var_lib = '${%s}' % var_lib
+                for lib in provided:
+                    replacement[lib] = var_lib
+                    confirmed.add(lib)
+                    mapping[lib] = package
+        replacement = dict([(lib2option.get(x, x), y) for x, y in replacement.items()])
+        return replacement
+
+    def get_include_replacement(self, options, used_packages):
+        cmake_lib_map = dict(filter(lambda x: x[0][0] is not None and x[0][1] is not None, CMAKE_PATH_MAP.items()))
+        replacement = {}
+        include2option = {}
+        for option in sorted(options):
+            if option.startswith('-I'):
+                include2option[option[2:]] = option
+            elif option[:1] not in ('$', '-'):
+                include2option[option] = option
+            else:
+                continue
+
+        includeset = set(include2option.keys())
+        include2option = dict(filter(lambda x: x[0] != x[1], include2option.items()))
+        needed = set(includeset)
+        for include in sorted(includeset):
+            provided = set()
+            pkg2library = CMAKE_PATH_MAP.get((None, include), {})
+
+            if len(pkg2library) >= 1:
+                exceed = set()
+                for pkg, library in pkg2library.items():
+                    include2var = CMAKE_INCLUDE_DIRS.get(pkg, {})
+                    includes = set(include2var.keys())
+                    provided = needed.intersection(includes)
+                    if not provided: continue
+                    exceed = includes.difference(includeset)
+                    if not exceed: break
+                    else:
+                        exceed_pkg = pkg
+                        exceed_provided = provided
+                if exceed:
+                    print("include dir %s needed by " % include, exceed_pkg, exceed, exceed_provided)
+                if provided:
+                    replacement.update([(x, '${%s}' % include2var[x]) for x in provided])
+                    needed.difference_update(provided)
+                continue
+
+            if include in PKG_CONFIG_INCLUDE2PKGS:
+                exceed = set()
+                packages = PKG_CONFIG_INCLUDE2PKGS[include]
+                for pkg in packages:
+                    includes = set(PKG_CONFIG_INCLUDE_DIRS[pkg])
+                    provided = includes.intersection(needed)
+                    if not provided: continue
+                    exceed = includes.difference(includeset)
+                    if not exceed: break
+                    else:
+                        exceed_pkg = pkg
+                        exceed_provided = provided
+                if exceed:
+                    print("include dir %s needed by " % include, exceed_pkg, exceed, exceed_provided)
+
+            if provided:
+                prefix = pkg.upper()
+                var_name = prefix + '_INCLUDE_DIR'
+                var_include = '${%s}' % var_name
+                for inc in provided:
+                    replacement[inc] = var_include
+                needed.difference_update(provided)
+            elif include.startswith(self.root_dir): pass
+            else:
+                print("No lib provide include dir " + include)
+        replacement = dict([(include2option.get(x, x), y) for x, y in replacement.items()])
         return replacement
 
     @staticmethod
-    def replace_list_content(libs, replacement):
-        for option, lib in replacement.items():
-            if option in libs:
-                libs[libs.index(option)] = lib
+    def replace_list_content(members, replacement, not_uniq=False):
+        new_list = []
+        for member in list(members):
+            member = replacement.get(member, member)
+            if not_uniq or member not in new_list:
+                new_list.append(member)
+        members.clear()
+        if isinstance(members, set):
+            members.update(new_list)
+        else:
+            members.extend(new_list)
 
     def collect_package_imports(self):
+        includes = set()
+        libs = set()
+        include_args = ('includes', 'system_includes', 'iquote_includes')
+        for arg_name in include_args:
+            includes.update(self.common_configs.get(arg_name, []))
         for target in self.targets.values():
             if not isinstance(target, CppTarget): continue
-            replacement = self.get_lib_replacement(target.libs)
-            self.replace_list_content(target.libs, replacement)
+            for arg_name in include_args:
+                includes.update(target.get_values(arg_name))
+            libs.update(target.libs)
+
+        lib_replacement = self.get_lib_replacement(libs)
+
+        packages = set(self.packages.keys())
+        include_replacement = self.get_include_replacement(includes, packages)
+        return lib_replacement, include_replacement
+
+    def replace_with_package_vars(self, lib_replacement, include_replacement):
+        for target in self.targets.values():
+            if not isinstance(target, CppTarget): continue
+            self.replace_list_content(target.libs, lib_replacement)
+            self.replace_list_content(target.command.includes, include_replacement)
+        include_args = ('includes', 'system_includes', 'iquote_includes')
+        for arg_name in include_args:
+            common_includes = self.common_configs.get(arg_name, None)
+            if common_includes:
+                self.replace_list_content(common_includes, include_replacement)
 
     def write_common_configs(self):
         args_with_common = ('options', 'link_options', 'definitions',
@@ -215,32 +372,27 @@ class CmakeGenerator(PathUtils):
                 migrated.append(target)
         return migrated
 
-    def generate_pkg_config_command(self, lib):
-        prefix = lib.upper().replace('-', '')
-        var_lib = prefix + "_LIBRARIES"
-        var_include = prefix + "_INCLUDE_DIRS"
-        if var_lib != self.unique_name(var_lib):
-            warn("Variable %s for imported library %s is occupied." % (var_lib, lib))
-        if var_include != self.unique_name(var_include):
-            warn("Variable %s for imported library %s is occupied." % (var_include, lib))
+    def generate_pkg_config_command(self, lib, prefix):
         if '_' not in self.packages:
             self.packages['_'] = FindPackageDefinition('PkgConfig', '', None)
-        self.packages[lib] = definition = PkgCheckModulesDefinition(prefix, lib)
-        return var_lib
+        if lib not in self.packages:
+            self.packages[lib] = PkgCheckModulesDefinition(prefix, lib)
 
-    def generate_find_package_command(self, lib, module, var_lib, var_include):
+    def generate_find_package_command(self, package, module, var_lib, var_include):
         mode = 'MODULE'
         if var_lib != self.unique_name(var_lib):
-            warn("Variable %s for imported library %s %s is occupied." % (var_lib, lib, module))
+            warn("Variable %s for imported library %s %s is occupied." % (var_lib, package, module))
         if var_include != self.unique_name(var_include):
-            warn("Variable %s for imported library %s %s is occupied." % (var_include, lib, module))
-        definition = self.packages.get(lib, None)
-        if module and definition is not None:
+            warn("Variable %s for imported library %s %s is occupied." % (var_include, package, module))
+        definition = self.packages.get(package, None)
+        if definition is None:
+            definition = FindPackageDefinition(package, mode, module)
+            self.packages[package] = definition
+        if module:
             definition.add_module(module)
+            self.packages[package + module] = definition
         else:
-            definition = FindPackageDefinition(lib, mode, module)
-            self.packages[lib] = definition
-        return definition
+            return definition
 
     def output_project_common_args(self, arg_name, values):
         self.output.write('\n')
