@@ -220,7 +220,7 @@ class CppTarget(CmakeTarget):
                 part = self.generator.relpath(s)
             parts.append(part)
         parts = sorted(parts)
-        var_name = name.upper() + '_SRCS'
+        var_name = name.replace('.', '_').upper() + '_SRCS'
         var_refer = '${%s}' % var_name
         refers.append(var_refer)
         self.output_list_definition(var_name, parts)
@@ -228,7 +228,7 @@ class CppTarget(CmakeTarget):
             for var_refer in refers:
                 self.write_command('set_source_files_properties', 'PROPERTIES', var_refer, 'LANGUAGE CXX')
         self.write_command(command, options, name, refers)
-        if name != output_name:
+        if output_name and (name != output_name):
             self.output.set_property('TARGET', name, 'LIBRARY_OUTPUT_NAME', output_name)
         self.output_target_config(self.name())
         if self.depends:
@@ -341,6 +341,12 @@ class LibraryTarget(CppTarget):
     def __init__(self, command, target, sources=None, libtype='STATIC'):
         super(self.__class__, self).__init__(command, target, sources)
         self.libtype = libtype
+
+    def get_name(self):
+        extname = os.path.splitext(self.target)[1]
+        if extname not in ('o', 'so', 'dll', 'a'):
+            return os.path.basename(self.target)
+        return super(self.__class__, self).get_name()
 
     def cmake_command(self):
         return 'add_library'

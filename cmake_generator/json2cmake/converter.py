@@ -3,9 +3,9 @@ import re
 import logging
 
 from .utils import *
+from .command import C_COMPILERS
 from .migration import *
 from .generator import CmakeGenerator
-from .target import *
 
 
 # FORMAT = '%(asctime)-15s %(levelname)-8s %(module)s %(message)s'
@@ -26,8 +26,8 @@ class CmakeConverter(PathUtils):
     def convert(self):
         generators = CmakeConverter.generators
         targets = self.db.targets
-        linkings = self.db.linkings
-        for target, command_source in linkings.items():
+        linkings = sorted(self.db.linkings.items())
+        for target, command_source in linkings:
             self.generate_linked_target(target, command_source)
         targets = self.db.targets
         for cmd_id, target_sources in targets.items():
@@ -80,6 +80,9 @@ class CmakeConverter(PathUtils):
         linkage = command.linkage
         info("Process %s target %s" % (linkage, relpath(target, directory)))
         if linkage == 'SOURCE':
+            if command.compiler in C_COMPILERS:
+                output_name = generator.name_for_lib(target)
+                return generator.output_linked_target(command, files, target, 'OBJECT', output_name, set())
             return generator.output_custom_command(target, command, files)
         output_name = generator.name_for_lib(target)
         debug("%s %s linked by cmd #%s from %s"
@@ -87,9 +90,9 @@ class CmakeConverter(PathUtils):
                  ' '.join([relpath(f, directory) for f in files])))
         source_files, referenced_libs, compilations, depends = CmakeConverter.classify_source_files(
             files, target, db, directory)
-        generator.extract_generated_source_files(output_name, source_files, db.qt_ui_bucket, "ui", "qt5_wrap_ui")
-        generator.extract_generated_source_files(output_name, source_files, db.qt_rc_bucket, "rc", "qt5_add_resources")
-        generator.extract_generated_source_files(output_name, source_files, db.qt_moc_bucket, "moc", "qt5_wrap_cpp")
+        generator.extract_generated_source_files(output_name, source_files, db.qt_ui_bucket, depends, "ui", "qt5_wrap_ui")
+        generator.extract_generated_source_files(output_name, source_files, db.qt_rc_bucket, depends, "rc", "qt5_add_resources")
+        generator.extract_generated_source_files(output_name, source_files, db.qt_moc_bucket, depends, "moc", "qt5_wrap_cpp")
 
         command = command.copy()
         CmakeConverter.update_referenced_libs(command, referenced_libs)
@@ -124,11 +127,22 @@ class CmakeConverter(PathUtils):
                              % (relpath(target, directory), f, '\n\t'.join(db.linkings.keys())))
                     source_files.add(f)
                 continue
-            for source, cmd_id in db.objects[f].items():
-                if db.command_linkage(cmd_id) != 'INSTALL':
-                    compilations.setdefault(cmd_id, {})[source] = f
-                source_files.add(source)
+            CmakeConverter.collect_depends(db, f, compilations, source_files, dependencies)
+
         return source_files, referenced_libs, compilations, dependencies
+
+    @staticmethod
+    def collect_depends(db, target, compilations, source_files, dependencies):
+        for source, cmd_id in db.objects.get(target, {}).items():
+            source_compiler = db.command[cmd_id].compiler
+            if source_compiler in ('rcc', 'uic'): continue
+            source_files.add(source)
+            linkage = db.command_linkage(cmd_id)
+            if linkage == 'INSTALL': continue
+            compilations.setdefault(cmd_id, {})[source] = target
+            if source not in db.objects: continue
+            dependencies.add(source)
+            CmakeConverter.collect_depends(db, source, {}, set(), dependencies)
 
     @staticmethod
     def update_referenced_libs(config, referenced_libs):

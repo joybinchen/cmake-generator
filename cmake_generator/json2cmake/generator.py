@@ -515,11 +515,6 @@ class CmakeGenerator(PathUtils):
         info("Target %s includes %s %s" % (name, options, ' '.join(parts)))
         self.write_command('target_include_directories', options, name, parts)
 
-    def output_compile_args(self, arg_type, name, parts):
-        info("Target %s output compile %-11s: %s" % (name, arg_type, ' '.join(parts)))
-        if not parts: return
-        self.write_command('target_compile_' + arg_type, 'PRIVATE', name, parts)
-
     def output_custom_command(self, target, command, sources):
         name, output_name = self.name_as_target(target)
         self.targets[target] = CustomCommandTarget(command, target, sources)
@@ -532,7 +527,7 @@ class CmakeGenerator(PathUtils):
     def output_qt_wrapper(self, name, sources, wrapper):
         self.variables[name] = QtWrapDefinition(wrapper, name, sources)
 
-    def extract_generated_source_files(self, name, files, bucket, kind, wrapper):
+    def extract_generated_source_files(self, name, files, bucket, depends, kind, wrapper):
         sources = set()
         targets = set()
         for file in files:
@@ -541,8 +536,8 @@ class CmakeGenerator(PathUtils):
                 for cmd_id, bucket_sources in bucket[file].items():
                     for source in bucket_sources: sources.add(source)
         if targets:
-            for target in targets:
-                if target in files: files.remove(target)
+            files.difference_update(targets)
+            depends.difference_update(targets)
         if sources:
             var_name = "%s_%s_SRCS" % (name, kind)
             var_name = self.unique_name(var_name)

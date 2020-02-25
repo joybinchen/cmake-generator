@@ -4,8 +4,9 @@ from .utils import freeze, basestring, resolve, relpath, get_loggers
 from .denpendency import find_dependencies
 
 
-__all__ = ['Command', 'resolve_destination']
+__all__ = ['Command', 'resolve_destination', 'C_COMPILERS']
 logger, info, debug, warn, error = get_loggers(__name__)
+C_COMPILERS = ('gcc', 'g++', 'clang', 'clang++')
 
 
 def resolve_destination(path, cwd, source):
@@ -107,7 +108,7 @@ class Command(object):
         return target
 
     def parse_cxx(self, words, root_dir, target=''):
-        if self.compiler in ('gcc', 'g++', 'clang', 'clang++'):
+        if self.compiler in C_COMPILERS:
             self.linkage = 'EXECUTABLE'
         for word in words:
             if word == '-o':
@@ -166,6 +167,9 @@ class Command(object):
             elif word == '-shared':
                 self.options.append(word)
                 self.linkage = 'SHARED'
+            elif word == '-E':
+                self.options.append(word)
+                self.linkage = 'SOURCE'
             elif word.startswith('-'):
                 self.options.append(word)
 
@@ -193,10 +197,26 @@ class Command(object):
                 self.options.append(word)
         return target
 
+    def parse_rcc(self, words, source, target=''):
+        for word in words:
+            if word.startswith('-'):
+                if word == '-o':
+                    target = next(words)
+                elif word == '-name':
+                    self.options.append('%s %s' % (word, next(words)))
+                else:
+                    self.options.append(word)
+            elif source != word:
+                warn('different source in command', source, word)
+        return target
+
     def parse_moc(self, words, source, target=''):
         for word in words:
             if word == '-o':
                 target = next(words)
+            elif word == '--include':
+                include_header = next(words)
+                self.missing_depends.add(resolve(include_header, self.cwd))
             elif word.startswith('-'):
                 if word.startswith('-D'):
                     define = next(words) if len(word) == 2 else word[2:]
@@ -204,9 +224,6 @@ class Command(object):
                     self.definitions.append(define)
                 elif word.startswith('-I'):
                     including = next(words) if len(word) == 2 else word[2:]
-                    self.includes.append(resolve(including, self.cwd))
-                elif word == '--include':
-                    including = next(words)
                     self.includes.append(resolve(including, self.cwd))
                 else:
                     self.options.append(word)

@@ -1,6 +1,11 @@
 import os
 import re
 import subprocess
+if __name__ != '__main__':
+    from .collect_cmake_vars import *
+else:
+    from cmake_generator.json2cmake.collect_cmake_vars import *
+
 __all__ = ['PKG_CONFIG_LIB2PKGS', 'PKG_CONFIG_LIBS',
            'PKG_CONFIG_INCLUDE2PKGS', 'PKG_CONFIG_INCLUDE_DIRS',
            'CMAKE_LIBS', 'CMAKE_PATH_MAP', 'CMAKE_LIBRARIES', 'CMAKE_INCLUDE_DIRS']
@@ -292,9 +297,10 @@ def update_cmake_path_map():
     global CMAKE_PATH_MAP
     global CMAKE_LIBRARIES
     global CMAKE_INCLUDE_DIRS
-    cmake_vars_path = os.path.join(ROOT_DIR, 'cmake-vars.txt')
-    if not os.path.isfile(cmake_vars_path): return None
-    include_index, library_index = extract_cmake_vars_to_index(cmake_vars_path)
+    if not os.path.isfile(CMAKE_VARS_PATH):
+        generate_cmake_vars_file(CMAKE_VARS_PATH)
+
+    include_index, library_index = extract_cmake_vars_to_index(CMAKE_VARS_PATH)
     include2lib, CMAKE_INCLUDE_DIRS = extract_include_mapping(include_index)
     library2lib, CMAKE_LIBRARIES = extract_library_mapping(library_index)
     CMAKE_PATH_MAP = extract_include_lib_map(include2lib, CMAKE_INCLUDE_DIRS, library2lib, CMAKE_LIBRARIES)

@@ -69,11 +69,23 @@ class CompilationDatabase(PathUtils):
             source, arguments, cwd = CompilationDatabase.read_entry(entry, self.directory)
             cmd, target = Command.parse(arguments, source, cwd, self.directory)
             if cmd:
-                if cmd.linkage == 'INSTALL':
-                    self.update_install_index(cmd, target, source, install_cmd_dict)
-                else:
-                    self.update_target_index(cmd, target, source, cmd_dict)
-                CompilationDatabase.update_command_after_indexing(cmd, source, target, self.directory)
+                self.update_index(cmd, target, source, cmd_dict, install_cmd_dict)
+
+    def update_index(self, cmd, target, source, cmd_dict, install_cmd_dict):
+        extra_sources = sorted(cmd.missing_depends)
+        cmd.missing_depends.clear()
+        if cmd.linkage == 'INSTALL':
+            cmd = self.update_install_index(cmd, target, source, install_cmd_dict)
+        else:
+            cmd = self.update_target_index(cmd, target, source, cmd_dict)
+        cmd_id = cmd.id
+        for src in extra_sources:
+            # self.update_target_index(cmd, target, src, cmd_dict)
+            self.objects.setdefault(target, {})[src] = cmd_id
+            self.sources.setdefault(src, {})[target] = cmd_id
+            if cmd.linkage not in ('OBJECT', 'LOCALE', None):
+                self.update_linking_index(target, cmd_id, src, self.linkings)
+        CompilationDatabase.update_command_after_indexing(cmd, source, target, self.directory)
 
     @staticmethod
     def read_entry(entry, directory):
@@ -100,16 +112,18 @@ class CompilationDatabase(PathUtils):
             cmd.id = cmd_id
             if log:
                 log('New cmd #%s: %s' % (cmd_id, '\n'.join(["%-10s %s" % x for x in frozen_cmd])))
-        return cmd_id
+        return cmd_list[cmd_id]
 
     def update_install_index(self, cmd, target, source, cmd_dict):
-        cmd_id = self.update_command_index(cmd, cmd_dict, self.install_command)
+        cmd = self.update_command_index(cmd, cmd_dict, self.install_command)
         debug("Install cmd #%s install %-27s => %s"
-              % (cmd_id, self.relpath(source), self.relpath(target)))
-        self.installs.setdefault(cmd_id, {})[target] = source
+              % (cmd.id, self.relpath(source), self.relpath(target)))
+        self.installs.setdefault(cmd.id, {})[target] = source
+        return cmd
 
     def update_target_index(self, cmd, target, source, cmd_dict):
-        cmd_id = self.update_command_index(cmd, cmd_dict, self.command, debug)
+        cmd = self.update_command_index(cmd, cmd_dict, self.command, debug)
+        cmd_id = cmd.id
         debug("entry %-35s cmd #%s => %-10s %s"
               % (self.relpath(source), cmd_id, cmd.linkage, self.relpath(target)))
         self.sources.setdefault(source, {})[target] = cmd_id
@@ -127,6 +141,7 @@ class CompilationDatabase(PathUtils):
                 self.update_linking_index(target, cmd_id, source)
         elif cmd.linkage not in ('OBJECT', 'LOCALE', None):
             self.update_linking_index(target, cmd_id, source, self.linkings)
+        return cmd
 
     def update_linking_index(self, target, cmd_id, file_, bucket=None):
         debug("Add linked target %s from %s"
