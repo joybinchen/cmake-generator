@@ -231,6 +231,7 @@ class CppTarget(CmakeTarget):
         var_name = name.replace('.', '_').upper() + '_SRCS'
         var_refer = '${%s}' % var_name
         refers.append(var_refer)
+        refers = sorted(refers)
         self.output_list_definition(var_name, parts)
         if self.command.compile_c_as_cxx:
             for var_refer in refers:
