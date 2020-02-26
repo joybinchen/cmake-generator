@@ -280,6 +280,8 @@ class CmakeGenerator(PathUtils):
             if not isinstance(target, CppTarget): continue
             self.replace_list_content(target.libs, lib_replacement)
             self.replace_list_content(target.command.includes, include_replacement)
+            self.replace_list_content(target.command.system_includes, include_replacement)
+            self.replace_list_content(target.command.iquote_includes, include_replacement)
         include_args = ('includes', 'system_includes', 'iquote_includes')
         for arg_name in include_args:
             common_includes = self.common_configs.get(arg_name, None)
