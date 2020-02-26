@@ -1,4 +1,5 @@
 import os
+from os.path import basename, dirname, splitext, commonpath, isabs, isfile, exists
 import traceback
 from .utils import PathUtils, relpath, resolve, get_loggers, basestring, cmake_resolve_binary, cmake_resolve_source
 
@@ -71,7 +72,7 @@ class CmakeTarget(object):
         self.common_configs = {}
         self.target = target
         self.sources = set()
-        self.name_ = name if name else os.path.basename(target)
+        self.name_ = name if name else basename(target)
         self.parent = None
         self.generator = None
         self.output = None
@@ -182,13 +183,20 @@ class CmakeTarget(object):
         if isinstance(sources, basestring):
             sources = [sources, ]
         sources = [self.generator.relpath(s) for s in sources]
-        if len(sources) > 2:
+        if len(sources) > 1:
             if not self.name():
-                name, _ = self.generator.name_as_target(os.path.commonpath(sources))
+                name, _ = self.generator.name_as_target(commonpath(sources))
                 self.set_name(name)
             var_name = "%s_%s" % (self.name().upper(), install_type)
             self.output.write_command('set', var_name, '', sources)
             sources = ["${%s}" % var_name, ]
+        else:
+            destination_name = basename(destination)
+            source_name = basename(sources[0])
+            if isfile(destination) or not exists(destination) and source_name == destination_name:
+                destination = dirname(destination)
+                if source_name != destination_name:
+                    destination += ' RENAME ' + destination_name
         self.output.write_command('install', '', install_type, sources, 'DESTINATION ' + destination)
 
     def cmake_resolve_source(self, path):
@@ -343,9 +351,9 @@ class LibraryTarget(CppTarget):
         self.libtype = libtype
 
     def get_name(self):
-        extname = os.path.splitext(self.target)[1]
+        extname = splitext(self.target)[1]
         if extname not in ('o', 'so', 'dll', 'a'):
-            return os.path.basename(self.target)
+            return basename(self.target)
         return super(self.__class__, self).get_name()
 
     def cmake_command(self):
@@ -377,7 +385,7 @@ class CustomCommandTarget(CmakeTarget):
         values = list(self.command.options)
         for inc in self.command.includes:
             inc = self.generator.relpath(inc)
-            if not os.path.isabs(inc):
+            if not isabs(inc):
                 inc = '${CMAKE_CURRENT_SOURCE_DIR}/' + inc
             option_arg = '-I' if PathUtils.isdir(inc) else '--include '
             values.append(option_arg + inc)
