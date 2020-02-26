@@ -196,6 +196,7 @@ class CmakeGenerator(PathUtils):
         for include in sorted(includeset):
             provided = set()
             pkg2library = CMAKE_PATH_MAP.get((None, include), {})
+            pkg2library = dict(filter(lambda x: x[0] in used_packages, pkg2library.items()))
 
             if len(pkg2library) >= 1:
                 exceed = set()
@@ -220,6 +221,7 @@ class CmakeGenerator(PathUtils):
                 exceed = set()
                 packages = PKG_CONFIG_INCLUDE2PKGS[include]
                 for pkg in packages:
+                    if pkg not in used_packages: continue
                     includes = set(PKG_CONFIG_INCLUDE_DIRS[pkg])
                     provided = includes.intersection(needed)
                     if not provided: continue
