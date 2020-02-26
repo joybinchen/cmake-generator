@@ -89,7 +89,10 @@ class CmakeGenerator(PathUtils):
     def collect_common_configs(self):
         args_with_common = ('options', 'link_options', 'definitions',
                             'includes', 'system_includes', 'iquote_includes')
-        cpp_targets = set(filter(lambda t: isinstance(t, CppTarget), self.targets.values()))
+        cpp_targets = []
+        for name, target in sorted(self.targets.items()):
+            if target not in cpp_targets and isinstance(target, CppTarget):
+                cpp_targets.append(target)
         for arg_name in args_with_common:
             arg_values = [getattr(t.command, arg_name) for t in cpp_targets]
             self.common_configs[arg_name] = get_common_values(arg_values)
