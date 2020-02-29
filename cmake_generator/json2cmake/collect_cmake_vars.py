@@ -14,6 +14,7 @@ ROOT_DIR = dirname(PARENT_DIR)
 CMAKE_VARS_PATH = os.path.join(CWD, 'cmake-vars.txt')
 CMAKE_FILE_HEADER = """
 cmake_minimum_required(VERSION 3.10)
+find_package(Qt5 COMPONENTS Core)
 """
 CMAKE_FILE_BOTTOM = """
 get_cmake_property(_variableNames VARIABLES)
@@ -33,7 +34,7 @@ def generate_cmake_vars_file(cmake_vars_path):
 			packages.add(matched.group(1))
 
 	regex = re.compile(r'^.*/([^/]*)Config.cmake')
-	lines = subprocess.getoutput('locate Config.cmake$').splitlines(False)
+	lines = subprocess.getoutput('locate Config.cmake').splitlines(False)
 	for line in lines:
 		matched = regex.match(line)
 		if matched:

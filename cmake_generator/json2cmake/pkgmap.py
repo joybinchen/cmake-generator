@@ -1,14 +1,15 @@
 import os
 import re
 import subprocess
-if __name__ != '__main__':
-    from .collect_cmake_vars import *
-else:
-    from cmake_generator.json2cmake.collect_cmake_vars import *
+from .utils import get_loggers
+from .collect_cmake_vars import *
+
+logger, info, debug, warn, error = get_loggers(__name__)
 
 __all__ = ['PKG_CONFIG_LIB2PKGS', 'PKG_CONFIG_LIBS',
            'PKG_CONFIG_INCLUDE2PKGS', 'PKG_CONFIG_INCLUDE_DIRS',
-           'CMAKE_LIBS', 'CMAKE_PATH_MAP', 'CMAKE_LIBRARIES', 'CMAKE_INCLUDE_DIRS']
+           'CMAKE_LIBS', 'CMAKE_PATH_MAP', 'CMAKE_LIBRARIES', 'CMAKE_INCLUDE_DIRS',
+           ]
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(THIS_DIR)
@@ -50,7 +51,7 @@ def get_pkg_config_info(pkg_config_vars_path):
         except:
             import traceback
             traceback.print_exc()
-            print(command, result)
+            debug(command, result)
     pkg_config_vars_output = open(pkg_config_vars_path, 'w')
     pkg_config_vars_output.writelines(lines)
     pkg_config_vars_output.close()
@@ -72,7 +73,7 @@ def update_pkg_config_libs():
             for lib in result:
                 pkgs = PKG_CONFIG_LIB2PKGS.setdefault(lib, set())
                 pkgs.add(package)
-                print('pkg-config --libs %s ==> %s' % (package, lib))
+                debug('pkg-config --libs %s ==> %s' % (package, lib))
 
         if name.endswith('_INCLUDE_DIRS'):
             package = name[:-13]
@@ -81,7 +82,7 @@ def update_pkg_config_libs():
             for include in result:
                 pkgs = PKG_CONFIG_INCLUDE2PKGS.setdefault(include, set())
                 pkgs.add(package)
-                print('pkg-config --cflags %s ==> %s' % (package, include))
+                debug('pkg-config --cflags %s ==> %s' % (package, include))
 
 
 def extract_cmake_vars_to_index(cmake_vars_path):
@@ -164,8 +165,8 @@ def extract_include_mapping(include_index):
                     pass
                 elif len(name) < len(prev_name):
                     includes[d] = name
-            print('%s => %s %s' % (d, pkg_name, name))
-        print(pkg_name, "inc=>>", includes)
+            debug('%s => %s %s' % (d, pkg_name, name))
+        debug(pkg_name, "inc=>>", includes)
         continue
     include2multipkg = dict(filter(lambda x: len(x[1]) > 1, include2pkg.items()))
     pkg2multiinclude = dict(filter(lambda x: len(x[1]) > 1, CMAKE_INCLUDE_DIRS.items()))
@@ -224,8 +225,8 @@ def extract_library_mapping(library_index):
                     pass
                 elif len(name) < len(prev_name):
                     libraries[path] = name
-            print('%s => %s %s' % (path, pkg_name, name))
-        if path: print(pkg_name, "lib=>>", libraries)
+            debug('%s => %s %s' % (path, pkg_name, name))
+        if path: debug(pkg_name, "lib=>>", libraries)
         continue
     library2multipkg = dict(filter(lambda x: len(x[1]) > 1, library2pkg.items()))
     pkg2multilibrary = dict(filter(lambda x: len(x[1]) > 1, CMAKE_LIBRARIES.items()))
@@ -291,7 +292,7 @@ def extract_include_lib_map(include2lib, lib2include, library2lib, lib2library):
 
 def update_cmake_libs():
     for module in QT5MODULES:
-        CMAKE_LIBS['Qt5' + module] = ('Qt5', module, 'Qt5::' + module, 'Qt5%s_INCLUDE_DIR' % module)
+        CMAKE_LIBS['Qt5' + module] = ('Qt5', module, 'Qt5::' + module, 'Qt5%s_INCLUDE_DIRS' % module)
 
 def update_cmake_path_map():
     global CMAKE_PATH_MAP
@@ -388,50 +389,3 @@ update_cmake_libs()
 CMAKE_PATH_MAP, CMAKE_LIBRARIES, CMAKE_INCLUDE_DIRS = update_cmake_path_map()
 
 update_pkg_config_libs()
-
-if __name__ == '__main__':
-    from cmake_generator.json2cmake.generator import CmakeGenerator
-    generator = CmakeGenerator('get', '/tmp', '/git/NLP/Dictionary/Goldendict/goldendict.joybin_mod')
-    libs = [
-        'Qt5Core', 'Qt5Xml', 'Qt5Svg', 'Qt5Gui', 'Qt5X11Extras', 'Qt5Sql',
-        'Qt5WebKit', 'Qt5WebKitWidgets', 'Qt5Widgets', 'Qt5Multimedia',
-        'Qt5Concurrent', 'Qt5Network', 'Qt5PrintSupport', 'Qt5Help',
-        'aom', 'ao', 'avformat', 'GL', 'bz2', 'dl', 'Xtst',
-        '-L/usr/local/lib', 'lzo2', 'hunspell-1.6', 'vdpau', '-lvorbisfile', '-lvorbis', 'pthread', 'Xv', 'Xext',
-        'm', 'eb', 'avutil', 'avcodec', 'tiff', 'z', 'swresample', 'X11', 'ogg', 'lzma',
-        '${CMAKE_THREAD_LIBS_INIT}',
-    ]
-    includes = {
-        '/usr/include/x86_64-linux-gnu/qt5/QtX11Extras',
-        '/usr/include/x86_64-linux-gnu/qt5/QtWebKit',
-        '/usr/include/x86_64-linux-gnu/qt5/QtXml',
-        '/usr/include/x86_64-linux-gnu/qt5/QtMultimedia',
-        '/usr/lib/x86_64-linux-gnu/qt5/mkspecs/linux-clang',
-        '/usr/include/x86_64-linux-gnu/qt5/QtGui',
-        '/usr/include/x86_64-linux-gnu/qt5/QtWidgets',
-        '/usr/include/x86_64-linux-gnu/qt5/QtSql',
-        '/git/NLP/Dictionary/Goldendict/goldendict.joybin_mod/Release',
-        '/usr/include/x86_64-linux-gnu/qt5/QtNetwork',
-        '/usr/include/x86_64-linux-gnu/qt5',
-        '/usr/include/x86_64-linux-gnu/qt5/QtPrintSupport',
-        '/git/NLP/Dictionary/Goldendict/goldendict.joybin_mod/Release/build',
-        '/usr/include/x86_64-linux-gnu/qt5/QtCore',
-        '/usr/include/x86_64-linux-gnu/qt5/QtConcurrent',
-        '/usr/local/include',
-        '/git/NLP/Dictionary/Goldendict/goldendict.joybin_mod',
-        '/usr/include/x86_64-linux-gnu/qt5/QtHelp',
-        '/git/NLP/Dictionary/Goldendict/goldendict.joybin_mod/qtsingleapplication/src',
-        '-I/usr/include/hunspell',
-        '/usr/include/x86_64-linux-gnu/qt5/QtSvg',
-        '/usr/include/x86_64-linux-gnu/qt5/QtWebKitWidgets',
-        '/usr/include/libdrm',
-    }
-    lib_replacement = generator.get_lib_replacement(libs)
-    old_libs = list(libs)
-    generator.replace_list_content(libs, lib_replacement)
-    packages = set(generator.packages.keys())
-    include_replacement = generator.get_include_replacement(includes, packages)
-    old_includes = list(includes)
-    generator.replace_list_content(includes, include_replacement)
-    import pprint
-    pprint.pprint(include_replacement)

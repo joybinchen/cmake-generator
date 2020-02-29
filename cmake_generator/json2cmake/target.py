@@ -26,7 +26,7 @@ class OutputWithIndent(object):
         delimiter = '\n' + self.indent
         self.stream.write(delimiter.join(lines))
 
-    def writeln(self, content):
+    def writeln(self, content=''):
         self.stream.write('\n')
         self.write(content)
         self.indented = False
@@ -326,7 +326,9 @@ class CppTarget(CmakeTarget):
             if lib not in libs:
                 libs.append(lib)
         if libs:
-            self.write_command('target_link_libraries', 'PRIVATE', name, libs)
+            self.output.writeln()
+            self.generator.output_remove_duplicates(
+                'target_link_libraries', name + '_LINKED_LIBRARIES', libs, name + ' PRIVATE')
 
     def refer_linked_target(self, f, linkage):
         if linkage in ('STATIC', 'SHARED'):

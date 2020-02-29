@@ -6,6 +6,7 @@ from .utils import *
 from .migration import get_common_values, migrate_command, name_by_common_prefix
 from .target import *
 from .pkgmap import *
+from .pkg_replace import *
 
 logger, info, debug, warn, error = get_loggers(__name__)
 
@@ -99,152 +100,26 @@ class CmakeGenerator(PathUtils):
         return args_with_common
 
     def get_lib_replacement(self, libs):
-        lib2option = {}
-        for option in list(libs):
-            if option.startswith('-l'):
-                lib = option[2:]
-            elif option[:1] not in ('$', '-'):
-                lib = option
-            else:
-                continue
-            lib2option[lib] = option
+        lib2option = map2option(libs)
         libs = sorted(lib2option.keys())
+        cmake_packages, pkgconfig_packages = find_package_for_libs(libs)
 
-        mapping = {}
-        replacement = {}
-        lib2packages = {}
-        for lib in list(libs):
-            if lib in CMAKE_LIBS:
-                package, module, var_lib, var_include = CMAKE_LIBS[lib]
-                mapping[lib] = package if module is None else (package + module)
-                self.generate_find_package_command(package, module, var_lib, var_include)
-                replacement[lib] = ('${%s}' % var_lib) if var_lib.find("::") < 0 else var_lib
-            elif lib in PKG_CONFIG_LIB2PKGS:
-                packages = PKG_CONFIG_LIB2PKGS[lib]
-                lib2packages[lib] = packages
-                if len(packages) != 1: continue
+        lib_replacement = {}
+        for lib, package in cmake_packages.items():
+            package, module, var_lib, var_include = CMAKE_LIBS[lib]
+            self.generate_find_package_command(package, module, var_lib, var_include)
+            lib_replacement[lib] = ('${%s}' % var_lib) if var_lib.find("::") < 0 else var_lib
 
-                package = next(iter(packages))
-                mapping[lib] = package
-                prefix = package.upper().replace('-', '')
-                var_lib = prefix + "_LIBRARIES"
-                if package not in self.packages:
-                    var_name = self.unique_name(var_lib)
-                    if var_lib != var_name:
-                        warn("Variable %s for imported library %s is occupied." % (var_lib, lib))
-                    self.generate_pkg_config_command(package, prefix)
-                replacement[lib] = '${%s}' % var_lib
-            else:
-                continue
+        for lib, package in pkgconfig_packages.items():
+            prefix = package.upper().replace('-', '')
+            self.generate_pkg_config_command(package, prefix)
+            var_lib = prefix + "_LIBRARIES"
+            lib_replacement[lib] = '${%s}' % var_lib
+            value = self.used_names.setdefault(var_lib, lib)
+            # if value != lib: warn("var %s for lib %s occupied by %s." % (var_lib, lib, value))
 
-        candidates = set()
-        confirmed = set()
-        for lib in self.packages.keys():
-            packages = set(PKG_CONFIG_LIBS.get(lib, []))
-            provided = packages.intersection(libs)
-            confirmed.update(provided)
-        for lib, packages in list(lib2packages.items()):
-            intersection = packages.intersection(confirmed)
-            if intersection:
-                lib2packages[lib] = intersection
-            else:
-                candidates.update(packages)
-
-        libset = set(libs)
-        unconfirmed = sorted(candidates.difference(confirmed))
-        for package in unconfirmed:
-            needed = libset.difference(confirmed)
-            if not needed:
-                break
-            libraries = set(PKG_CONFIG_LIBS[package])
-            provided = needed.intersection(libraries)
-            if not provided:
-                continue
-            diff = libraries.difference(libset)
-            if not diff:
-                prefix = package.upper().replace('-', '')
-                if package not in self.packages:
-                    self.generate_pkg_config_command(package, prefix)
-
-                var_lib = prefix + "_LIBRARIES"
-                var_name = self.unique_name(var_lib)
-                if var_lib != var_name:
-                    warn("Variable %s for imported library %s is occupied." % (var_lib, lib))
-                var_lib = '${%s}' % var_lib
-                for lib in provided:
-                    replacement[lib] = var_lib
-                    confirmed.add(lib)
-                    mapping[lib] = package
-        replacement = dict([(lib2option.get(x, x), y) for x, y in replacement.items()])
-        return replacement
-
-    def get_include_replacement(self, options, used_packages):
-        cmake_lib_map = dict(filter(lambda x: x[0][0] is not None and x[0][1] is not None, CMAKE_PATH_MAP.items()))
-        replacement = {}
-        include2option = {}
-        for option in sorted(options):
-            if option.startswith('-I'):
-                include2option[option[2:]] = option
-            elif option[:1] not in ('$', '-'):
-                include2option[option] = option
-            else:
-                continue
-
-        includeset = set(include2option.keys())
-        include2option = dict(filter(lambda x: x[0] != x[1], include2option.items()))
-        needed = set(includeset)
-        for include in sorted(includeset):
-            provided = set()
-            pkg2library = CMAKE_PATH_MAP.get((None, include), {})
-            pkg2library = dict(filter(lambda x: x[0] in used_packages, pkg2library.items()))
-
-            if len(pkg2library) >= 1:
-                exceed = set()
-                for pkg, library in pkg2library.items():
-                    include2var = CMAKE_INCLUDE_DIRS.get(pkg, {})
-                    includes = set(include2var.keys())
-                    provided = needed.intersection(includes)
-                    if not provided: continue
-                    exceed = includes.difference(includeset)
-                    if not exceed: break
-                    else:
-                        exceed_pkg = pkg
-                        exceed_provided = provided
-                if exceed:
-                    print("include dir %s needed by " % include, exceed_pkg, exceed, exceed_provided)
-                if provided:
-                    replacement.update([(x, '${%s}' % include2var[x]) for x in provided])
-                    needed.difference_update(provided)
-                continue
-
-            if include in PKG_CONFIG_INCLUDE2PKGS:
-                exceed = set()
-                packages = PKG_CONFIG_INCLUDE2PKGS[include]
-                for pkg in packages:
-                    if pkg not in used_packages: continue
-                    includes = set(PKG_CONFIG_INCLUDE_DIRS[pkg])
-                    provided = includes.intersection(needed)
-                    if not provided: continue
-                    exceed = includes.difference(includeset)
-                    if not exceed: break
-                    else:
-                        exceed_pkg = pkg
-                        exceed_provided = provided
-                if exceed:
-                    print("include dir %s needed by " % include, exceed_pkg, exceed, exceed_provided)
-
-            if provided:
-                prefix = pkg.upper()
-                var_name = prefix + '_INCLUDE_DIR'
-                var_include = '${%s}' % var_name
-                for inc in provided:
-                    replacement[inc] = var_include
-                needed.difference_update(provided)
-            elif include.startswith(self.root_dir): pass
-            else:
-                print("No lib provide include dir " + include)
-        replacement = dict([(include2option.get(x, x), y) for x, y in replacement.items()])
-        return replacement
+        lib_replacement = dict((lib2option.get(x, x), y) for x, y in lib_replacement.items())
+        return lib_replacement
 
     @staticmethod
     def replace_list_content(members, replacement, not_uniq=False):
@@ -272,9 +147,8 @@ class CmakeGenerator(PathUtils):
             libs.update(target.libs)
 
         lib_replacement = self.get_lib_replacement(libs)
-
         packages = set(self.packages.keys())
-        include_replacement = self.get_include_replacement(includes, packages)
+        include_replacement = get_include_replacement(includes, packages)
         return lib_replacement, include_replacement
 
     def replace_with_package_vars(self, lib_replacement, include_replacement):
@@ -401,22 +275,30 @@ class CmakeGenerator(PathUtils):
         else:
             return definition
 
+    def output_remove_duplicates(self, command, name, values, kind=''):
+        if not values: return
+        if len(values) == 1:
+            self.write_command(command, '', kind, values)
+        else:
+            self.write_command('set', '', name, values)
+            self.write_command('list', '', 'REMOVE_DUPLICATES', [name, ])
+            self.write_command(command, '', kind, ['${%s}' % name, ])
+
     def output_project_common_args(self, arg_name, values):
         self.output.write('\n')
         if not values:
             return
-        if arg_name.endswith('includes'):
-            values = list(map(self.relpath, values))
-            if arg_name == 'includes':
-                self.write_command('include_directories', 'AFTER', '', values)
-            elif arg_name == 'system_includes':
-                self.write_command('include_directories', 'AFTER', 'SYSTEM', values)
-            elif arg_name == 'iquote_includes':
-                self.write_command('include_directories', 'AFTER', '', values)
         elif arg_name == 'link_options':
             self.write_command('add_link_options', '', '', values)
         elif arg_name in ('options', 'definitions'):
             self.write_command('add_compile_' + arg_name, '', '', values)
+        values = list(map(self.relpath, values))
+        if arg_name == 'includes':
+            self.output_remove_duplicates('include_directories', 'INCLUDE_DIRS', values)
+        elif arg_name == 'system_includes':
+            self.output_remove_duplicates('include_directories', 'ISYSTEM_DIRS', values, 'ISYSTEM')
+        elif arg_name == 'iquote_includes':
+            self.output_remove_duplicates('include_directories', 'IQUOTE_DIRS', values)
 
     def write_project_header(self):
         self.write('cmake_minimum_required(VERSION 2.8.8)\n')
