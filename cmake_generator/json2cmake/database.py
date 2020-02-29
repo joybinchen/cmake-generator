@@ -12,10 +12,11 @@ logger, info, debug, warn, error = get_loggers(__name__)
 
 
 class CompilationDatabase(PathUtils):
-    def __init__(self, infile, filename):
+    def __init__(self, infile, filename, source_dir=None):
         filename = resolve(filename, os.getcwd())
-        directory = os.path.dirname(filename)
-        PathUtils.__init__(self, directory, directory)
+        build_dir = os.path.dirname(filename)
+        PathUtils.__init__(self, source_dir, source_dir)
+        self.build_dir = build_dir
         # targets: {cmd_id: {target: {source, ...}, ...}, ...}
         self.targets = {}
         # sources: {source: {target: cmd_id, ...}, ...}
@@ -35,6 +36,9 @@ class CompilationDatabase(PathUtils):
         self.install_command = []
         self.command = []
         self.input = infile
+
+    def binary_dir(self):
+        return self.build_dir if self.build_dir else self.directory
 
     def command_linkage(self, cmd_id):
         return self.command[cmd_id].linkage

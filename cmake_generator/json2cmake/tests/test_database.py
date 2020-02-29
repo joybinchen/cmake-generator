@@ -9,7 +9,7 @@ from ..database import *
 class TestCompilationDatabase(unittest.TestCase):
     def test_db_parse_empty_json(self):
         infile = StringIO('[]')
-        db = CompilationDatabase(infile, '/git/gdb/compile_commands.json')
+        db = CompilationDatabase(infile, '/git/gdb/cmake-build-debug/compile_commands.json', '/git/gdb')
         db.read()
         self.assertEqual(db.directory, '/git/gdb')
         self.assertEqual(db.root_dir, '/git/gdb')
@@ -29,7 +29,7 @@ class TestCompilationDatabase(unittest.TestCase):
     },
     {}
 ]''')
-        db = CompilationDatabase(infile, '/git/gdb/compile_commands.json')
+        db = CompilationDatabase(infile, '/git/gdb/cmake-build-debug/compile_commands.json', '/git/gdb')
         db.read()
         self.assertEqual(db.directory, '/git/gdb')
         self.assertEqual(db.root_dir, '/git/gdb')

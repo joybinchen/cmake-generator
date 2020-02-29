@@ -23,7 +23,7 @@ class TestCmakeGenerator(unittest.TestCase):
     def test_executable(self):
         output_text = ''
         self.assertEqual(self.output.getvalue(), output_text)
-        generator = CmakeGenerator('gdbserver', '/git/gdb/gdbserver', '/git/gdb')
+        generator = CmakeGenerator('gdbserver', '/git/gdb/gdbserver', '/git/gdb', '/git/gdb/cmake-build-debug')
         generator.set_install_prefix('/usr/local')
         generator.output_linked_target(self.cxx_command, ['abc.c', 'def.cpp'],
                                        '/git/gdb/gdbserver/libdoit.a', 'STATIC', 'libdoit', [])
@@ -56,7 +56,6 @@ project(gdbserver LANGUAGES C CXX)
         output_text += """
 add_compile_options(  -x c++ -Wall -Werror)
 
-
 add_compile_definitions( 
 \tLOCALEDIR="/usr/local/share/locale"
 \tHAVE_CONFIG_H
@@ -65,8 +64,6 @@ add_compile_definitions(
 set(INCLUDE_DIRS  . config .. /usr/include)
 list(REMOVE_DUPLICATES  INCLUDE_DIRS)
 include_directories(  ${INCLUDE_DIRS})
-
-
 """
         self.assertEqual(self.output.getvalue(), output_text)
 

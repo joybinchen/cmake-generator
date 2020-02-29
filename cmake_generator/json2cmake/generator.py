@@ -14,10 +14,10 @@ logger, info, debug, warn, error = get_loggers(__name__)
 class CmakeGenerator(PathUtils):
     used_names = {"": ""}
 
-    def __init__(self, name, cwd, root_dir, single_file=False):
+    def __init__(self, name, cwd, root_dir, binary_dir, single_file=False):
         PathUtils.__init__(self, cwd, root_dir)
         self.generated = False
-        self.binary_dir = cwd
+        self.binary_dir = binary_dir
         self.name = name
         self.stream = StringIO()
         self.output = None
@@ -285,10 +285,9 @@ class CmakeGenerator(PathUtils):
             self.write_command(command, '', kind, ['${%s}' % name, ])
 
     def output_project_common_args(self, arg_name, values):
+        if not values: return
         self.output.write('\n')
-        if not values:
-            return
-        elif arg_name == 'link_options':
+        if arg_name == 'link_options':
             self.write_command('add_link_options', '', '', values)
         elif arg_name in ('options', 'definitions'):
             self.write_command('add_compile_' + arg_name, '', '', values)
@@ -324,7 +323,10 @@ class CmakeGenerator(PathUtils):
         return include_path
 
     def name_for_lib(self, path):
-        return PathUtils.name_for_target(self.relpath(path))
+        rel_path = self.relpath(path)
+        if rel_path == '.':
+            rel_path = os.path.basename(path).upper()
+        return PathUtils.name_for_target(rel_path)
 
     def name_as_target(self, path):
         output_name = self.name_for_lib(path)
@@ -415,24 +417,6 @@ class CmakeGenerator(PathUtils):
 
     def output_qt_wrapper(self, name, sources, wrapper):
         self.variables[name] = QtWrapDefinition(wrapper, name, sources)
-
-    def extract_generated_source_files(self, name, files, bucket, depends, kind, wrapper):
-        sources = set()
-        targets = set()
-        for file in files:
-            if file in bucket:
-                targets.add(file)
-                for cmd_id, bucket_sources in bucket[file].items():
-                    for source in bucket_sources: sources.add(source)
-        if targets:
-            files.difference_update(targets)
-            depends.difference_update(targets)
-        if sources:
-            var_name = "%s_%s_SRCS" % (name, kind)
-            var_name = self.unique_name(var_name)
-            self.output_qt_wrapper(var_name, sources, wrapper)
-            # self.output_var_definition(var_name, sources)
-            files.add('${%s}' % var_name)
 
     def migrate_custom_targets(self, cmd_id, command, dest_pattern, src_pattern, paths, kind="Locales"):
         fields = []

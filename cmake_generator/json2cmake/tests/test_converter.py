@@ -43,7 +43,7 @@ class TestCmakeConverter(unittest.TestCase):
         )
 
     def test_converter(self):
-        db = CompilationDatabase(StringIO(), '/git/gdb/compile_commands.json')
+        db = CompilationDatabase(StringIO(), '/git/gdb/cmake-build-debug/compile_commands.json', '/git/gdb')
         converter = CmakeConverter(db, 'gdb', '/git/gdb')
         CmakeConverter.generators['gdb'] = MockCmakeGenerator('/git/gdb', '/git/gdb')
         CmakeConverter.generators['gdbserver'] = MockCmakeGenerator('/git/gdb/gdbserver', '/git/gdb')

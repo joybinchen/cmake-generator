@@ -8,7 +8,7 @@ from ..generator import CmakeGenerator
 class TestPackageMap(unittest.TestCase):
     def setUp(self):
         self.output = StringIO()
-        self.generator = CmakeGenerator('get', '/tmp', '/git/goldendict')
+        self.generator = CmakeGenerator('get', '/tmp', '/git/goldendict', '/git/goldendict/Release')
         self.generator.output = self.output
         self.maxDiff = 5024
         self.libs = [

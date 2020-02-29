@@ -179,13 +179,14 @@ class CmakeTarget(object):
     def write_command(self, command, options, name, parts):
         return self.output.write_command(command, options, name, parts)
 
-    def install_files(self, install_type, destination, sources):
-        if isinstance(sources, basestring):
-            sources = [sources, ]
-        sources = [self.generator.relpath(s) for s in sources]
+    def install_files(self, install_type, destination, files):
+        if isinstance(files, basestring):
+            files = [files, ]
+        sources = [self.generator.relpath(s) for s in files]
         if len(sources) > 1:
             if not self.name():
-                name, _ = self.generator.name_as_target(commonpath(sources))
+                common_part = commonpath(files)
+                name, _ = self.generator.name_as_target(common_part)
                 self.set_name(name)
             var_name = "%s_%s" % (self.name().upper(), install_type)
             self.output.write_command('set', var_name, '', sources)
@@ -401,7 +402,7 @@ class CustomCommandTarget(CmakeTarget):
     def output_target(self, pattern_replace={}):
         if self.generated: return
         self.generated = True
-        target = 'OUTPUT ' + self.generator.relpath(self.target % pattern_replace)
+        target = 'OUTPUT ' + relpath(self.target % pattern_replace, self.generator.binary_dir)
         command_line = 'COMMAND %s %s' % (self.compiler, ' '.join(self.get_options()))
         parts = []
         parts.append(command_line)

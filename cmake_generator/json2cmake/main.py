@@ -29,6 +29,8 @@ def get_default_name(compilation_database):
 
 
 def main():
+    cwd = os.getcwd()
+    outfile = os.path.join(cwd, 'CMakeLists.txt')
     parser = argparse.ArgumentParser(description="""
         Convert a compile_commands.json file to a CMakeLists.txt file.
     """)
@@ -40,9 +42,9 @@ def main():
 path of the compilation database (default: compile_commands.json or stdin)
         """
     )
-    outfile = 'CMakeLists.txt' if os.isatty(sys.stdout.fileno()) else '-'
     parser.add_argument(
-        '-o', '--outfile', type=argparse.FileType('w'), default=outfile,
+        '-o', '--outfile', type=argparse.FileType('w'),
+        default=outfile if os.isatty(sys.stdout.fileno()) else '-',
         help="""
 path of the CMake file (default: CMakeLists.txt or stdout)
         """
@@ -87,7 +89,8 @@ which may be difficult to get automatically captured using a ld logger.
         filename = args.infile.name
     else:
         filename = os.path.join(os.getcwd(), 'compile_commands.json')
-    db = CompilationDatabase(args.infile, filename)
+    source_dir = os.path.dirname(outfile)
+    db = CompilationDatabase(args.infile, filename, source_dir)
     db.read()
     if os.path.isfile(args.extra_infile):
         db.read(open(args.extra_infile, 'r'))
