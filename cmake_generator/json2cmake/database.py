@@ -71,21 +71,21 @@ class CompilationDatabase(PathUtils):
             if cmd:
                 self.update_index(cmd, target, source, cmd_dict, install_cmd_dict)
 
-    def update_index(self, cmd, target, source, cmd_dict, install_cmd_dict):
-        extra_sources = sorted(cmd.missing_depends)
-        cmd.missing_depends.clear()
-        if cmd.linkage == 'INSTALL':
-            cmd = self.update_install_index(cmd, target, source, install_cmd_dict)
+    def update_index(self, command, target, source, cmd_dict, install_cmd_dict):
+        extra_sources = sorted(command.missing_depends.get(target, set()))
+        command.missing_depends.clear()
+        if command.linkage == 'INSTALL':
+            command = self.update_install_index(command, target, source, install_cmd_dict)
         else:
-            cmd = self.update_target_index(cmd, target, source, cmd_dict)
-        cmd_id = cmd.id
+            command = self.update_target_index(command, target, source, cmd_dict)
+        cmd_id = command.id
         for src in extra_sources:
             # self.update_target_index(cmd, target, src, cmd_dict)
             self.objects.setdefault(target, {})[src] = cmd_id
             self.sources.setdefault(src, {})[target] = cmd_id
-            if cmd.linkage not in ('OBJECT', 'LOCALE', None):
+            if command.linkage not in ('OBJECT', 'LOCALE', None):
                 self.update_linking_index(target, cmd_id, src, self.linkings)
-        CompilationDatabase.update_command_after_indexing(cmd, source, target, self.directory)
+        CompilationDatabase.update_command_after_indexing(command, source, target, self.directory)
 
     @staticmethod
     def read_entry(entry, directory):

@@ -277,7 +277,7 @@ class CmakeGenerator(PathUtils):
 
     def output_remove_duplicates(self, command, name, values, kind=''):
         if not values: return
-        if len(values) == 1:
+        if len(list(filter(lambda x: x.startswith('${'), values))) == 1:
             self.write_command(command, '', kind, values)
         else:
             self.write_command('set', '', name, values)

@@ -24,11 +24,9 @@ command_line_cxx = [
 
 command_line_moc = [
     '/usr/lib/qt5/bin/moc',
-    '',
     '-DHAVE_X11',
     '--include',
     'build/moc_predefs.h',
-    '',
     '-DPROGRAM_VERSION="1.5.0-RC2+git"',
     '-I/usr/include',
     '../mainwindow.hh',
@@ -51,7 +49,7 @@ class TestCommand(unittest.TestCase):
         expected_command = create_command(
             'clang++', cwd=cwd, linkage='OBJECT',
             compile_c_as_cxx=True,
-            missing_depends=set(),
+            missing_depends={},
             includes=resolve_paths(['.', 'config', '..', '../include'], cwd),
             definitions=['LOCALEDIR="/usr/local/share/locale"', "HAVE_CONFIG_H"],
             options=[
@@ -94,7 +92,7 @@ class TestCommand(unittest.TestCase):
         expected_target = resolve('dictionary.o', cwd)
         expected_command = create_command(
             'clang', cwd=cwd, linkage='OBJECT',
-            missing_depends=set(),
+            missing_depends={},
             includes=resolve_paths(['.', 'config', '..', '../include'], cwd),
             definitions=['LOCALEDIR="/usr/local/share/locale"', "HAVE_CONFIG_H"],
             options=[
@@ -168,7 +166,8 @@ class TestCommand(unittest.TestCase):
         expected_command = create_command(
             'moc', cwd=cwd, linkage='SOURCE',
             definitions=['HAVE_X11', 'PROGRAM_VERSION="1.5.0-RC2+git"'],
-            includes=['/git/goldendict/build/moc_predefs.h', '/usr/include'],
+            missing_depends={'/git/goldendict/build/moc_mainwindow.cpp': {'/git/goldendict/build/moc_predefs.h', }, },
+            includes=['/usr/include', ],
         )
         self.assertEqual(target, '/git/goldendict/build/moc_mainwindow.cpp')
         self.assertEqual(command.__dict__, expected_command.__dict__)

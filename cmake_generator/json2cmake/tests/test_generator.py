@@ -14,7 +14,7 @@ class TestCmakeGenerator(unittest.TestCase):
         self.cxx_command = create_command(
             'clang++', cwd=cwd, linkage='OBJECT',
             compile_c_as_cxx=True,
-            missing_depends=set(),
+            missing_depends={},
             includes=resolve_paths(['.', 'config', '..', '/usr/include'], cwd),
             definitions=['LOCALEDIR="/usr/local/share/locale"', "HAVE_CONFIG_H"],
             options=["-x c++", "-Wall", "-Werror", ],
@@ -53,12 +53,20 @@ project(gdbserver LANGUAGES C CXX)
         })
         generator.write_common_configs()
 
-        output_text += """add_compile_options(  -x c++ -Wall -Werror)
+        output_text += """
+add_compile_options(  -x c++ -Wall -Werror)
+
+
 add_compile_definitions( 
 \tLOCALEDIR="/usr/local/share/locale"
 \tHAVE_CONFIG_H
 )
-include_directories( AFTER . config .. /usr/include)
+
+set(INCLUDE_DIRS  . config .. /usr/include)
+list(REMOVE_DUPLICATES  INCLUDE_DIRS)
+include_directories(  ${INCLUDE_DIRS})
+
+
 """
         self.assertEqual(self.output.getvalue(), output_text)
 
@@ -66,7 +74,7 @@ include_directories( AFTER . config .. /usr/include)
 set(LIBDOIT_SRCS abc.c def.cpp)
 set_source_files_properties(${LIBDOIT_SRCS} PROPERTIES LANGUAGE CXX)
 add_library(libdoit STATIC ${LIBDOIT_SRCS})
-set_property(TARGET libdoit PROPERTY LIBRARY_OUTPUT_NAME doit)
+set_property(TARGET libdoit PROPERTY LIBRARY_OUTPUT_NAME libdoit.a)
 
 set(DOIT_SRCS libdoit.a main.cpp)
 set_source_files_properties(${DOIT_SRCS} PROPERTIES LANGUAGE CXX)

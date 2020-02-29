@@ -6,19 +6,19 @@ __all__ = ['find_dependencies', ]
 logger, info, debug, warn, error = get_loggers(__name__)
 
 
-def find_dependencies(file_, command, root_dir):
+def find_dependencies(source, command, root_dir):
     cwd = command.cwd
     if not cwd.endswith('/'):
         cwd += '/'
-    file_ = resolve(file_, cwd)
-    if not os.path.exists(file_):
+    source = resolve(source, cwd)
+    if not os.path.exists(source):
         return []
 
-    depend_file = get_depend_file_name(file_, cwd)
+    depend_file = get_depend_file_name(source, cwd)
     if os.path.exists(depend_file):
         output = open(depend_file).read().strip()
     else:
-        output = extract_dependencies(command, file_, cwd)
+        output = extract_dependencies(command, source, cwd)
         open(depend_file, 'w').write(output)
     if not output:
         return []
@@ -40,8 +40,10 @@ def collect_dependencies(lines, cwd, directory):
         debug('Files relative to %s in %s %s\n\t%s' % (i, len(lines), directory, list(
             filter(lambda x: x.find(':') >= 0, depend_list))))
         depend_list = [os.path.relpath(f, directory) for f in depend_list]
-        local_depends = filter(lambda x: not x.startswith('../'), depend_list)
-        missing_depends.update(filter(lambda x: not os.path.exists(x), local_depends))
+        local_depends = list(filter(lambda x: not x.startswith('../'), depend_list))
+        for f in local_depends:
+            if not os.path.exists(f):
+                missing_depends.add(f)
     return missing_depends
 
 

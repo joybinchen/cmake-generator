@@ -214,7 +214,9 @@ class CppTarget(CmakeTarget):
         options = self.command_options()
         name = self.name()
         output_name = self.get_name()
+        source_dir = self.generator.directory
         binary_dir = self.generator.binary_dir
+        in_source_build = source_dir == binary_dir
         parts = []
         refers = []
         for s in self.sources:
@@ -222,7 +224,7 @@ class CppTarget(CmakeTarget):
             if s.startswith('${') and s.endswith('}'):
                 refers.append(s)
                 continue
-            elif s.startswith(binary_dir + '/'):
+            elif s.startswith(binary_dir + '/') and not in_source_build:
                 part = cmake_resolve_binary(s, binary_dir)
             else:
                 part = self.generator.relpath(s)

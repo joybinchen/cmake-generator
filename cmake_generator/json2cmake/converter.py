@@ -75,8 +75,10 @@ class CmakeConverter(PathUtils):
 
     @staticmethod
     def write_command_for_linked_target(command, target, files, generator, db, directory):
-        files = sorted(files)
-        files.extend(command.missing_depends)
+        files = list(files)
+        missing_depends = command.missing_depends.get(target, set())
+        files.extend(missing_depends)
+        files.sort()
         linkage = command.linkage
         info("Process %s target %s" % (linkage, relpath(target, directory)))
         if linkage == 'SOURCE':
@@ -133,8 +135,17 @@ class CmakeConverter(PathUtils):
 
     @staticmethod
     def collect_depends(db, target, compilations, source_files, dependencies):
-        for source, cmd_id in db.objects.get(target, {}).items():
-            source_compiler = db.command[cmd_id].compiler
+        source_map = db.objects.get(target, {})
+        for source, cmd_id in source_map.items():
+            command = db.command[cmd_id]
+            extra_sources = command.missing_depends.get(target, set())
+            if extra_sources:
+                for f in extra_sources:
+                    source_files.add(f)
+                    dependencies.add(f)
+                    compilations.setdefault(cmd_id, {})[f] = target
+                    CmakeConverter.collect_depends(db, f, compilations, source_files, dependencies)
+            source_compiler = command.compiler
             if source_compiler in ('rcc', 'uic'): continue
             source_files.add(source)
             linkage = db.command_linkage(cmd_id)
@@ -182,22 +193,23 @@ class CmakeConverter(PathUtils):
         return False
 
     def generate_unlinked_target(self, cmd_id, target_sources):
-        if not target_sources: return
         command = self.db.command[cmd_id]
         linkage = command.linkage
         if linkage == 'LOCALE':
             self.output_locales(cmd_id, command, target_sources)
             return
         files = set()
-        for target, source in target_sources.items():
+        for target, sources in target_sources.items():
+            missing_depends = dict(filter(lambda x: x[1] == target, command.missing_depends.items()))
+            sources = list(sources)
+            sources.extend(missing_depends.keys())
             if target in self.db.linkings: continue
-            for f in source:
+            for f in sources:
                 cmd = self.db.sources.get(f, {}).get(target, cmd_id)
                 if cmd != cmd_id:
                     warn("target %s gen by command %s and %s" % (target, cmd, cmd_id))
                 files.add(f)
         if files:
-            files.update(command.missing_depends)
             self.output_library(cmd_id, command, sorted(files), linkage)
 
     def generate_migrated_install_target(self, cmd_id, destination_sources):

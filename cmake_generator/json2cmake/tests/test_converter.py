@@ -13,16 +13,13 @@ class MockGeneratorAttribute:
         self.obj = obj
 
     def __call__(self, *args, **kwargs):
-        print('%s.%s(%s, %s)' % (self.obj.name(), self.item, args, kwargs))
+        print('%s.%s(%s, %s)' % (self.obj.name, self.item, args, kwargs))
 
 
 class MockCmakeGenerator(PathUtils):
     def __init__(self, directory, root_dir):
         PathUtils.__init__(self, directory, root_dir)
-        self.name_ = os.path.basename(directory)
-
-    def name(self):
-        return self.name_
+        self.name = os.path.basename(directory)
 
     def setup_output(self, output=None):
         return self.directory
@@ -39,7 +36,7 @@ class TestCmakeConverter(unittest.TestCase):
         self.cxx_command = create_command(
             'clang++', cwd=cwd, linkage='OBJECT',
             compile_c_as_cxx=True,
-            missing_depends=set(),
+            missing_depends={},
             includes=resolve_paths(['.', 'config', '..', '/usr/include'], cwd),
             definitions=['LOCALEDIR="/usr/local/share/locale"', "HAVE_CONFIG_H"],
             options=["-x c++", "-Wall", "-Werror", ],

@@ -41,7 +41,7 @@ class Command(object):
         self.iquote_includes = []
         self.libs = []
         self.referenced_libs = {}
-        self.missing_depends = set()
+        self.missing_depends = {}
         self.linkage = 'SOURCE'
 
     def __repr__(self):
@@ -87,6 +87,8 @@ class Command(object):
         command = Command(compiler, cwd)
         target = command.parse_command(words, source, root_dir)
         target = resolve(target, cwd)
+        for key in list(command.missing_depends):
+            command.missing_depends[target] = command.missing_depends.pop(key)
         return command, target
 
     def parse_command(self, words, source, root_dir):
@@ -206,8 +208,8 @@ class Command(object):
                     self.options.append('%s %s' % (word, next(words)))
                 else:
                     self.options.append(word)
-            elif source != word:
-                warn('different source in command', source, word)
+            elif source != word and word != os.path.basename(source):
+                warn('different source in command %s %s' % (source, word))
         return target
 
     def parse_moc(self, words, source, target=''):
@@ -216,7 +218,7 @@ class Command(object):
                 target = next(words)
             elif word == '--include':
                 include_header = next(words)
-                self.missing_depends.add(resolve(include_header, self.cwd))
+                self.missing_depends.setdefault(target, set()).add(resolve(include_header, self.cwd))
             elif word.startswith('-'):
                 if word.startswith('-D'):
                     define = next(words) if len(word) == 2 else word[2:]
@@ -357,5 +359,5 @@ class Command(object):
             info("cmd #%s created OBJECT %-25s depends on missing %s"
                  % (self.id, relpath(target, root_dir),
                     ' '.join([relpath(f, root_dir) for f in missing_depends])))
-            self.missing_depends.update(missing_depends)
+            self.missing_depends.setdefault(target, set()).update(missing_depends)
             self.include_binary_dir = True

@@ -177,13 +177,19 @@ class TestInstallTarget(unittest.TestCase):
         target = InstallTarget(command, '/usr/local/shared', [os.getcwd() + '/images/abc.png', 'styles/good.css'])
         target.bind(self.generator)
         target.output_target()
-        output_text += '\ninstall(FILES images/abc.png styles/good.css DESTINATION shared)\n'
+        output_text += """
+set( SHARED_FILES images/abc.png styles/good.css)
+install(FILES ${SHARED_FILES} DESTINATION shared)
+"""
         self.assertEqual(self.output.getvalue(), output_text)
 
         target = InstallTarget(command, '/usr/shared', [os.getcwd() + '/images/abc.png', 'styles/good.css'])
         target.bind(self.generator)
         target.output_target()
-        output_text += '\ninstall(FILES images/abc.png styles/good.css DESTINATION /usr/shared)\n'
+        output_text += """
+set( SHARED_FILES images/abc.png styles/good.css)
+install(FILES ${SHARED_FILES} DESTINATION /usr/shared)
+"""
         self.assertEqual(self.output.getvalue(), output_text)
 
 
@@ -255,14 +261,17 @@ class TestWrappedTarget(unittest.TestCase):
         self.assertEqual(self.output.getvalue(), output_text)
         command = create_command('install', options=['-c', '-m', '644'])
         child_target = InstallTarget(command, '/usr/local/shared', ['styles/good%(0)s.css'])
+        child_target.bind(self.generator)
+        child_target.output_target({'0': '${Y}'})
+        output_text += '''\ninstall(FILES styles/good${Y}.css DESTINATION shared)\n'''
+        self.assertEqual(self.output.getvalue(), output_text)
+        child_target = InstallTarget(command, '/usr/local/shared', ['styles/good%(0)s.css'])
         target = ForeachTargetWrapper(command, 'X', {'abc', 'bef', 'n'})
         target.append_child(child_target)
         self.assertEqual(len(target.children), 1)
         self.assertEqual(target.children[0].indent, 1)
         target.bind(self.generator)
         self.assertEqual(target.children[0].output.indent, '\t')
-        target.children[0].output_target({'0': '${Y}'})
-        output_text += '''\n\tinstall(FILES styles/good${Y}.css DESTINATION shared)'''
         self.assertEqual(self.output.getvalue(), output_text)
 
         target.output_target()
