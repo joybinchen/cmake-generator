@@ -172,6 +172,8 @@ class Command(object):
             elif word == '-E':
                 self.options.append(word)
                 self.linkage = 'SOURCE'
+            elif word == '-rdynamic':
+                self.link_options.append(word)
             elif word.startswith('-'):
                 self.options.append(word)
 
