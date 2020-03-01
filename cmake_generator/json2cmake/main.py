@@ -4,7 +4,7 @@ import sys
 import argparse
 import subprocess
 import logging
-from cmake_generator.json2cmake.utils import get_loggers
+from cmake_generator.json2cmake.utils import get_loggers, resolve
 from cmake_generator.json2cmake.database import CompilationDatabase
 from cmake_generator.json2cmake.converter import CmakeConverter
 
@@ -74,6 +74,13 @@ which may be difficult to get automatically captured using a ld logger.
 (default: extra_commands.json)
         """
     )
+    parser.add_argument(
+        '-b', '--build-dir', action='store',
+        default=None,
+        help="""
+    directory to run de build (default: parent directory of the compile_commands.json file)
+            """
+    )
     args = parser.parse_args()
     if args.debug:
         logging.basicConfig(format=FORMAT, level=logging.DEBUG)
@@ -90,7 +97,9 @@ which may be difficult to get automatically captured using a ld logger.
     else:
         filename = os.path.join(os.getcwd(), 'compile_commands.json')
     source_dir = os.path.dirname(outfile)
-    db = CompilationDatabase(args.infile, filename, source_dir)
+    build_dir = os.path.dirname(filename) if args.build_dir is None else args.build_dir
+    build_dir = resolve(build_dir, cwd)
+    db = CompilationDatabase(args.infile, filename, source_dir, build_dir)
     db.read()
     if os.path.isfile(args.extra_infile):
         db.read(open(args.extra_infile, 'r'))

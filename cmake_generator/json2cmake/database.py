@@ -12,9 +12,9 @@ logger, info, debug, warn, error = get_loggers(__name__)
 
 
 class CompilationDatabase(PathUtils):
-    def __init__(self, infile, filename, source_dir=None):
+    def __init__(self, infile, filename, source_dir=None, build_dir=None):
         filename = resolve(filename, os.getcwd())
-        build_dir = os.path.dirname(filename)
+        build_dir = os.path.dirname(filename) if build_dir is None else resolve(build_dir, os.getcwd())
         PathUtils.__init__(self, source_dir, source_dir)
         self.build_dir = build_dir
         # targets: {cmd_id: {target: {source, ...}, ...}, ...}
